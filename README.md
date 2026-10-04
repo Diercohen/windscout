@@ -8,7 +8,7 @@ WindScout drives the official `windscribe-cli`: it connects to each country × p
 
 ## Requirements
 
-- Linux (other platforms planned)
+- Linux or macOS
 - Node.js 20+
 - The [Windscribe desktop app](https://windscribe.com/download) installed, running and logged in. It includes `windscribe-cli`, which WindScout uses to control the app. Check with `windscribe-cli status`, which should show `Logged in`.
 
@@ -44,7 +44,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `space` | select / unselect the country |
 | `/` | search by country name or code (enter/esc to finish, esc again to clear) |
 | `a` / `n` | select all / unselect all (only the matching countries while a search is active) |
-| `1`–`5` | toggle a protocol |
+| `1`–`6` | toggle a protocol (`1`–`5` on Linux, which has no IKEv2) |
 | `s` | toggle the speed test (off = connect-only mode) |
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
@@ -68,7 +68,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | Option | Meaning | Default |
 |---|---|---|
 | `-c, --countries` | comma-separated ISO country codes, city names or nicknames | open the picker |
-| `-p, --protocols` | comma-separated: `wireguard`, `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all five |
+| `-p, --protocols` | comma-separated: `wireguard`, `ikev2` (macOS only), `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all |
 | `-t, --timeout` | seconds to wait for each connection | 20 |
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | saved, or off |

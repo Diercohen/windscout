@@ -11,11 +11,14 @@ import { PassThrough } from "node:stream";
 import { parseArgs, promisify } from "node:util";
 
 const CLI = "windscribe-cli";
-// the desktop app installs the CLI here and links it into /usr/bin; use it directly if the link is missing
-const DESKTOP_CLI = "/opt/windscribe/windscribe-cli";
+// the desktop app installs the CLI here and links it into /usr/bin (/usr/local/bin on macOS); use it directly if the link is missing
+const DESKTOP_CLI = process.platform === "darwin"
+  ? "/Applications/Windscribe.app/Contents/MacOS/windscribe-cli"
+  : "/opt/windscribe/windscribe-cli";
 const DOWNLOAD_URL = "https://windscribe.com/download";
 let cliBin = CLI;
-const PROTOCOLS = ["wireguard", "stealth", "wstunnel", "udp", "tcp"];
+// IKEv2 is offered by the macOS/Windows apps only
+const PROTOCOLS = ["wireguard", ...(process.platform === "linux" ? [] : ["ikev2"]), "stealth", "wstunnel", "udp", "tcp"];
 // ponytail: hardcoded because `windscribe-cli locations` returns nothing on 2.24; refresh when Windscribe adds countries
 const COUNTRIES = `US CA MX BR AR CL CO PE GB IE FR DE NL BE LU CH AT IT ES PT DK NO SE FI IS
 PL CZ SK HU RO BG GR CY TR RS HR SI BA MK AL MD UA EE LV LT IL AE AZ GE AM KZ IN JP KR
@@ -56,7 +59,8 @@ async function cli(...args) {
 }
 
 async function state() {
-  return (await cli("status")).match(/^Connect state: (.*)$/m)?.[1].trim() ?? "";
+  // macOS marks the line with a leading "*" once connected: "*Connect state: Connected: Miami - Vice"
+  return (await cli("status")).match(/^\*?Connect state: (.*)$/m)?.[1].trim() ?? "";
 }
 
 async function latencyMs(tries = 3) {
@@ -128,7 +132,7 @@ async function probe(query, protocol, timeout, onStep = () => {}) {
 
 // ---------- formatting ----------
 
-const color = (code, s) => (process.env.NO_COLOR ? s : `\x1b[${code}m${s}\x1b[0m`);
+const color = (code, s) => (process.env.NO_COLOR || !process.stdout.isTTY ? s : `\x1b[${code}m${s}\x1b[0m`);
 const bold = (s) => color(1, s), dim = (s) => color(2, s), green = (s) => color(32, s);
 const cyan = (s) => color(36, s), yellow = (s) => color(33, s), red = (s) => color(31, s);
 const fmt = (v, digits) => (v === null || v === undefined ? "-" : v.toFixed(digits));
@@ -395,7 +399,7 @@ function pick(saved, timeout) {
         centerIn(dim(searching
           ? "type to filter · ↑↓ move · enter/esc done"
           : `↑↓ move · space select · a/n ${query ? "all/none shown" : "all/none"} · / search`), width),
-        centerIn(dim(searching ? "" : `1-5 protocols · s speed test · enter start · ${query ? "esc clear · " : ""}q quit`), width),
+        centerIn(dim(searching ? "" : `1-${PROTOCOLS.length} protocols · s speed test · enter start · ${query ? "esc clear · " : ""}q quit`), width),
       ];
       lines.splice(head.length + table.length + 1, 0, centerIn(buttonLine, width), "");
       if (message) lines.push(centerIn(yellow(message), width));
@@ -508,7 +512,7 @@ function pick(saved, timeout) {
       else if (k === "a") list.forEach((c) => selected.add(c));
       else if (k === "n") list.forEach((c) => selected.delete(c));
       else if (k === "s") speedTest = !speedTest;
-      else if (/^[1-5]$/.test(str ?? "")) {
+      else if (/^[1-9]$/.test(str ?? "") && PROTOCOLS[Number(str) - 1]) {
         const p = PROTOCOLS[Number(str) - 1];
         protos.has(p) ? protos.delete(p) : protos.add(p);
       } else if (k === "escape" && query) query = "", cursor = 0;

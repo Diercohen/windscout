@@ -6,7 +6,7 @@
   "bin": { "windscout": "windscout.js" },
   "files": ["windscout.js"],
   "engines": { "node": ">=20" },
-  "os": ["linux"],
+  "os": ["linux", "darwin"],
   "keywords": ["windscribe", "vpn", "speedtest", "wireguard", "stealth", "cli"],
   "author": "Dier Cohen <i.am.dier.cohen@gmail.com>",
   "license": "MIT"
