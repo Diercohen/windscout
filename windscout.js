@@ -151,6 +151,26 @@ async function probe(query, protocol, timeout, onStep = () => {}) {
   }
 }
 
+// ---------- update check ----------
+
+const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+let update = null; // newer version on npm, once known
+let updateCheck = Promise.resolve();
+// numeric x.y.z compare; parseInt drops a prerelease suffix ("0-beta" → 0)
+const newer = (a, b) => {
+  const x = a.split(".").map((n) => parseInt(n)), y = b.split(".").map((n) => parseInt(n));
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+};
+// best effort: offline or registry down just means no notice
+const checkUpdate = () =>
+  fetch("https://registry.npmjs.org/windscout/latest", { signal: AbortSignal.timeout(3000) })
+    .then((r) => r.json())
+    .then(({ version }) => { if (version && newer(version, VERSION)) update = version; })
+    .catch(() => {});
+const updateNotice = () => `update available: ${VERSION} → ${update} · run: ${
+  process.env.npm_command === "exec" ? "npx windscout@latest" : "npm install -g windscout@latest"}`;
+
 // ---------- formatting ----------
 
 const color = (code, s) => (process.env.NO_COLOR || !process.stdout.isTTY ? s : `\x1b[${code}m${s}\x1b[0m`);
@@ -382,7 +402,7 @@ function pick(saved, timeout) {
     const render = () => {
       const rows = out.rows || 24;
       const list = visible();
-      const height = Math.max(3, rows - 19);
+      const height = Math.max(3, rows - 19 - (update ? 1 : 0));
       cursor = Math.max(0, Math.min(cursor, list.length - 1));
       if (cursor < top) top = cursor;
       if (cursor >= top + height) top = cursor - height + 1;
@@ -432,6 +452,7 @@ function pick(saved, timeout) {
       lines.splice(head.length + table.length + 1, 0, centerIn(buttonLine, width), "");
       if (message) lines.push(centerIn(yellow(message), width));
       lines.push("", centerIn(dim(repoLink), width));
+      if (update) lines.push(centerIn(yellow(updateNotice()), width));
       const at = draw(lines);
 
       // click map, in screen coordinates
@@ -458,7 +479,10 @@ function pick(saved, timeout) {
       };
     };
 
+    let closed = false;
+    updateCheck.then(() => update && !closed && render()); // the check usually lands after the first draw
     const finish = (value) => {
+      closed = true;
       out.off("resize", render);
       input.removeAllListeners("keypress");
       input.removeAllListeners("mouse");
@@ -747,6 +771,7 @@ async function main() {
     },
   });
   if (a.help) return console.log(HELP);
+  updateCheck = checkUpdate(); // runs while the app starts and the user picks, before the VPN starts switching
   const timeout = Number(a.timeout);
   if (!(timeout > 0)) throw new Error("--timeout must be a positive number");
 
@@ -776,6 +801,8 @@ async function main() {
   const results = await scan(countries, protocols, timeout, tty);
   if (stop) console.log(yellow("interrupted, showing partial results"));
   report(results, protocols, a.all);
+  await updateCheck;
+  if (update) console.error("\n" + yellow(updateNotice()));
 }
 
 main().catch((e) => {

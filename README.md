@@ -18,6 +18,8 @@ WindScout drives the official `windscribe-cli`: it connects to each country × p
 npm install -g windscout   # or run once with: npx windscout
 ```
 
+On startup, WindScout checks npm for a newer version. If there is one, it shows the command to update, both in the picker and after the final report.
+
 ## Usage
 
 Run `windscout` with no arguments to open the interactive picker:
