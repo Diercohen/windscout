@@ -2,13 +2,13 @@
 // WindScout: find which Windscribe locations and protocols actually work from here.
 // Drives the official windscribe-cli: connects to each country/protocol pair,
 // measures latency and download speed through the tunnel, prints a ranked table.
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import readline from "node:readline";
 import { PassThrough } from "node:stream";
-import { parseArgs, promisify } from "node:util";
+import { parseArgs } from "node:util";
 
 const CLI = "windscribe-cli";
 // the desktop app installs the CLI here and links it into /usr/bin (/usr/local/bin on macOS); use it directly if the link is missing.
@@ -31,7 +31,6 @@ const SPEED_URL = "https://speed.cloudflare.com/__down?bytes=10000000";
 const SPEED_SECONDS = 15;
 const CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "windscout", "config.json");
 
-const run = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => performance.now() / 1000;
 const regionName = new Intl.DisplayNames(["en"], { type: "region" });
@@ -46,16 +45,32 @@ let speedTest = true; // false = connect-only mode: skip the download test, rank
 
 // ---------- windscribe + measurements ----------
 
+// spawn, not execFile: if the app isn't running, the CLI launches it and the app inherits our stdout pipe.
+// The pipe then stays open after the CLI exits, and execFile would wait for its timeout. Settle on exit instead
+function run(args) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(cliBin, args, { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    const done = () => (clearTimeout(kill), p.stdout.destroy(), resolve(out));
+    const kill = setTimeout(() => p.kill(), 90_000);
+    p.on("error", (e) => (clearTimeout(kill), reject(e)));
+    p.on("close", done);
+    // the CLI's last output may still be in the pipe when it exits; read for a moment, then stop waiting
+    p.on("exit", () => setTimeout(done, 300));
+  });
+}
+
 async function cli(...args) {
-  let out = "";
+  let out;
   try {
-    ({ stdout: out } = await run(cliBin, args, { timeout: 90_000 }));
+    out = await run(args);
   } catch (e) {
     if (e.code === "ENOENT") {
       if (cliBin === CLI && existsSync(DESKTOP_CLI)) return (cliBin = DESKTOP_CLI), cli(...args);
       throw new Error(`${CLI} not found. Install the Windscribe desktop app (it includes ${CLI}): ${DOWNLOAD_URL}`);
     }
-    out = e.stdout ?? "";
+    throw e;
   }
   // the CLI mixes JSON log lines into stdout
   return out.split("\n").filter((l) => !l.startsWith('{"tm"')).join("\n");
@@ -724,7 +739,10 @@ async function main() {
   const timeout = Number(a.timeout);
   if (!(timeout > 0)) throw new Error("--timeout must be a positive number");
 
-  if (!(await cli("status")).includes("Logged in"))
+  // the first CLI call launches the app if it isn't running; give it a moment to start and restore the session
+  let status = await cli("status");
+  for (let i = 0; i < 15 && !status.includes("Logged in"); i++) await sleep(1000), status = await cli("status");
+  if (!status.includes("Logged in"))
     throw new Error("Windscribe is not logged in, or the app is not running. Open the Windscribe app and log in, then try again."
       + `\nDon't have it? ${DOWNLOAD_URL}`);
 
