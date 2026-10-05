@@ -18,6 +18,9 @@ const DESKTOP_CLI = {
   win32: join(process.env.ProgramFiles || "C:\\Program Files", "Windscribe", "windscribe-cli.exe"),
 }[process.platform] ?? "/opt/windscribe/windscribe-cli";
 const DOWNLOAD_URL = "https://windscribe.com/download";
+const REPO_URL = "https://github.com/Diercohen/windscout";
+// OSC 8 makes the text a link in terminals that support it; clicks we receive ourselves are handled in onData
+const repoLink = `\x1b]8;;${REPO_URL}\x1b\\${REPO_URL}\x1b]8;;\x1b\\`;
 let cliBin = CLI;
 // IKEv2 is offered by the macOS/Windows apps only
 const PROTOCOLS = ["wireguard", ...(process.platform === "linux" ? [] : ["ikev2"]), "stealth", "wstunnel", "udp", "tcp"];
@@ -170,7 +173,7 @@ const estimate = (nCountries, nProtocols, timeout) => nCountries * nProtocols * 
 
 // visible width: ANSI codes take no space; flags and emoji (🔍) take 2 columns. text symbols like ▶ ★ stay 1
 const vw = (s) =>
-  [...s.replace(/\x1b\[[0-9;]*m/g, "").replace(/[\u{1F1E6}-\u{1F1FF}]{2}|[\u{1F300}-\u{1FAFF}]/gu, "xx")].length;
+  [...s.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\/g, "").replace(/[\u{1F1E6}-\u{1F1FF}]{2}|[\u{1F300}-\u{1FAFF}]/gu, "xx")].length;
 // align: falsy = left, true = right, "center"
 const pad = (s, n, align = false) => {
   const gap = Math.max(0, n - vw(s));
@@ -299,8 +302,13 @@ const input = new PassThrough();
 readline.emitKeypressEvents(input);
 // SGR mouse report: ESC [ < button ; col ; row (M = press, m = release); 64/65 = wheel up/down
 // ponytail: assumes a report never straddles two reads, true for terminals in practice
+let link = null; // where draw() last put the repo link: { y, x }
+const openUrl = (url) =>
+  spawn({ darwin: "open", win32: "explorer" }[process.platform] ?? "xdg-open", [url], { stdio: "ignore", detached: true })
+    .on("error", () => {}).unref();
 const onData = (buf) => {
   const rest = buf.toString().replace(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/g, (_, b, x, y, kind) => {
+    if (link && kind === "M" && b === "0" && y - 1 === link.y && x - 1 >= link.x && x - 1 < link.x + REPO_URL.length) openUrl(REPO_URL);
     input.emit("mouse", { button: Number(b), x: Number(x) - 1, y: Number(y) - 1, press: kind === "M" });
     return "";
   });
@@ -334,6 +342,8 @@ function draw(lines) {
   const left = " ".repeat(Math.max(0, Math.floor((cols - w) / 2)));
   const top = Math.max(0, Math.floor((rows - lines.length) / 2));
   const screen = [...Array(top).fill(""), ...lines.map((l) => left + l)].slice(0, rows);
+  const i = screen.findIndex((l) => l.includes(REPO_URL));
+  link = i < 0 ? null : { y: i, x: vw(screen[i].slice(0, screen[i].indexOf("\x1b]8;;"))) };
   out.write("\x1b[H" + screen.map((l) => l + "\x1b[K").join("\n") + "\x1b[J");
   return { left: left.length, top };
 }
@@ -372,7 +382,7 @@ function pick(saved, timeout) {
     const render = () => {
       const rows = out.rows || 24;
       const list = visible();
-      const height = Math.max(3, rows - 17);
+      const height = Math.max(3, rows - 19);
       cursor = Math.max(0, Math.min(cursor, list.length - 1));
       if (cursor < top) top = cursor;
       if (cursor >= top + height) top = cursor - height + 1;
@@ -421,6 +431,7 @@ function pick(saved, timeout) {
       ];
       lines.splice(head.length + table.length + 1, 0, centerIn(buttonLine, width), "");
       if (message) lines.push(centerIn(yellow(message), width));
+      lines.push("", centerIn(dim(repoLink), width));
       const at = draw(lines);
 
       // click map, in screen coordinates
@@ -572,7 +583,7 @@ async function scan(countries, protocols, timeout, tty) {
     ].join(dim("   │   "));
     const minW = Math.max(64, vw(stats) + 6); // panel and table share one width
     // results table gets whatever height the status panel and footer leave
-    const room = Math.max(1, rows - 20);
+    const room = Math.max(1, rows - 22);
     const tried = results.some((r) => !["no such location", "interrupted"].includes(r.status));
     const table = view === "availability"
       ? (tried ? matrix(results, protocols, { minWidth: minW, limit: room }) : [])
@@ -610,7 +621,7 @@ async function scan(countries, protocols, timeout, tty) {
       while (vw(txt) > width && failed.length) txt = txt.slice(0, -8) + "…"; // ponytail: crude trim, fine for a status line
       lines.push("", centerIn(txt, width));
     }
-    lines.push("", centerIn(dim(`tab ${view === "ranking" ? "availability" : "ranking"} view · q stop · q twice force quit`), width));
+    lines.push("", centerIn(dim(`tab ${view === "ranking" ? "availability" : "ranking"} view · q stop · q twice force quit`), width), "", centerIn(dim(repoLink), width));
     draw(lines);
   };
 
