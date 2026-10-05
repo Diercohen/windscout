@@ -11,10 +11,12 @@ import { PassThrough } from "node:stream";
 import { parseArgs, promisify } from "node:util";
 
 const CLI = "windscribe-cli";
-// the desktop app installs the CLI here and links it into /usr/bin (/usr/local/bin on macOS); use it directly if the link is missing
-const DESKTOP_CLI = process.platform === "darwin"
-  ? "/Applications/Windscribe.app/Contents/MacOS/windscribe-cli"
-  : "/opt/windscribe/windscribe-cli";
+// the desktop app installs the CLI here and links it into /usr/bin (/usr/local/bin on macOS); use it directly if the link is missing.
+// Windows doesn't put it on PATH at all, so there the fallback is the normal case
+const DESKTOP_CLI = {
+  darwin: "/Applications/Windscribe.app/Contents/MacOS/windscribe-cli",
+  win32: join(process.env.ProgramFiles || "C:\\Program Files", "Windscribe", "windscribe-cli.exe"),
+}[process.platform] ?? "/opt/windscribe/windscribe-cli";
 const DOWNLOAD_URL = "https://windscribe.com/download";
 let cliBin = CLI;
 // IKEv2 is offered by the macOS/Windows apps only
@@ -36,8 +38,9 @@ const regionName = new Intl.DisplayNames(["en"], { type: "region" });
 const countryName = (code) => {
   try { return regionName.of(code); } catch { return code; } // city names / nicknames aren't region codes
 };
-// two regional-indicator letters render as the country's flag emoji
-const flag = (code) => /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "  ";
+// two regional-indicator letters render as the country's flag emoji (Windows has no flag glyphs: it would show
+// two boxed letters of unpredictable width and break the table borders, so leave the slot blank there)
+const flag = (code) => process.platform !== "win32" && /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "  ";
 let stop = 0;
 let speedTest = true; // false = connect-only mode: skip the download test, rank by latency
 

@@ -8,7 +8,7 @@ WindScout drives the official `windscribe-cli`: it connects to each country × p
 
 ## Requirements
 
-- Linux or macOS
+- Linux, macOS or Windows 10/11
 - Node.js 20+
 - The [Windscribe desktop app](https://windscribe.com/download) installed, running and logged in. It includes `windscribe-cli`, which WindScout uses to control the app. Check with `windscribe-cli status`, which should show `Logged in`.
 
@@ -49,7 +49,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
 
-**Mouse:** click a country to select or unselect it, click a protocol or the speed-test line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys. This needs a terminal with mouse support, which most have.
+**Mouse:** click a country to select or unselect it, click a protocol or the speed-test line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys. This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
 
 Your selection is saved to `~/.config/windscout/config.json` and preselected next time.
 
@@ -68,7 +68,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | Option | Meaning | Default |
 |---|---|---|
 | `-c, --countries` | comma-separated ISO country codes, city names or nicknames | open the picker |
-| `-p, --protocols` | comma-separated: `wireguard`, `ikev2` (macOS only), `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all |
+| `-p, --protocols` | comma-separated: `wireguard`, `ikev2` (macOS and Windows), `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all |
 | `-t, --timeout` | seconds to wait for each connection | 20 |
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | saved, or off |
