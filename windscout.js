@@ -754,6 +754,7 @@ Options:
   -t, --timeout SEC     seconds to wait for each connection (default: 20)
   -a, --all             also show failed attempts in the final table
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
+  -v, --version         show the installed version (and whether a newer one is out)
   -h, --help            show this help
 
 Selection is stored in ${CONFIG}
@@ -767,11 +768,17 @@ async function main() {
       timeout: { type: "string", short: "t", default: "20" },
       all: { type: "boolean", short: "a", default: false },
       help: { type: "boolean", short: "h", default: false },
+      version: { type: "boolean", short: "v", default: false },
       "no-speed": { type: "boolean", short: "n", default: false },
     },
   });
   if (a.help) return console.log(HELP);
   updateCheck = checkUpdate(); // runs while the app starts and the user picks, before the VPN starts switching
+  if (a.version) {
+    console.log(`windscout ${VERSION}`);
+    await updateCheck;
+    return update && console.error(yellow(updateNotice()));
+  }
   const timeout = Number(a.timeout);
   if (!(timeout > 0)) throw new Error("--timeout must be a positive number");
 
