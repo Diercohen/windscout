@@ -1,13 +1,30 @@
 {
   "name": "windscout",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Find which Windscribe locations and protocols work from your network, ranked by speed (unofficial)",
   "type": "module",
-  "bin": { "windscout": "windscout.js" },
-  "files": ["windscout.js"],
-  "engines": { "node": ">=20" },
-  "os": ["linux", "darwin", "win32"],
-  "keywords": ["windscribe", "vpn", "speedtest", "wireguard", "stealth", "cli"],
+  "bin": {
+    "windscout": "windscout.js"
+  },
+  "files": [
+    "windscout.js"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "keywords": [
+    "windscribe",
+    "vpn",
+    "speedtest",
+    "wireguard",
+    "stealth",
+    "cli"
+  ],
   "author": "Dier Cohen <i.am.dier.cohen@gmail.com>",
   "license": "MIT"
 }

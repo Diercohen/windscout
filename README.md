@@ -1,6 +1,6 @@
 # WindScout
 
-Find which Windscribe locations and protocols actually work from your network, ranked by speed.
+Find which Windscribe locations and protocols actually work from your network, ranked by speed. Runs on Linux, macOS and Windows.
 
 WindScout drives the official `windscribe-cli`: it connects to each country × protocol pair, measures latency and download speed through the tunnel, disconnects, and prints a ranked table.
 
@@ -10,7 +10,7 @@ WindScout drives the official `windscribe-cli`: it connects to each country × p
 
 - Linux, macOS or Windows 10/11
 - Node.js 20+
-- The [Windscribe desktop app](https://windscribe.com/download) installed, running and logged in. It includes `windscribe-cli`, which WindScout uses to control the app. Check with `windscribe-cli status`, which should show `Logged in`.
+- The [Windscribe desktop app](https://windscribe.com/download) installed, running and logged in. It includes `windscribe-cli`, which WindScout uses to control the app. Check with `windscribe-cli status`, which should show `Logged in`. On Windows the app doesn't put the CLI on `PATH`, so run `"C:\Program Files\Windscribe\windscribe-cli.exe" status` instead. WindScout finds it there on its own.
 
 ## Install
 
@@ -51,7 +51,7 @@ Run `windscout` with no arguments to open the interactive picker:
 
 **Mouse:** click a country to select or unselect it, click a protocol or the speed-test line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys. This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
 
-Your selection is saved to `~/.config/windscout/config.json` and preselected next time.
+Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
 While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal.
 
