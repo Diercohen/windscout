@@ -1,6 +1,6 @@
 {
   "name": "windscout",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Find which Windscribe locations and protocols work from your network, ranked by speed (unofficial)",
   "type": "module",
   "bin": {
@@ -23,8 +23,19 @@
     "speedtest",
     "wireguard",
     "stealth",
-    "cli"
+    "cli",
+    "censorship",
+    "firewall",
+    "unblock",
+    "vpn-speed-test",
+    "server-finder"
   ],
   "author": "Dier Cohen <i.am.dier.cohen@gmail.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Diercohen/windscout.git"
+  },
+  "homepage": "https://github.com/Diercohen/windscout#readme",
+  "bugs": "https://github.com/Diercohen/windscout/issues"
 }
