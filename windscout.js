@@ -175,6 +175,8 @@ const updateNotice = () => `update available: ${VERSION} → ${update} · run: $
 
 const color = (code, s) => (process.env.NO_COLOR || !process.stdout.isTTY ? s : `\x1b[${code}m${s}\x1b[0m`);
 const bold = (s) => color(1, s), dim = (s) => color(2, s), green = (s) => color(32, s);
+// underline off (24) instead of a full reset, so it nests inside dim/bold
+const under = (s) => (process.env.NO_COLOR || !process.stdout.isTTY ? s : `\x1b[4m${s}\x1b[24m`);
 const cyan = (s) => color(36, s), yellow = (s) => color(33, s), red = (s) => color(31, s);
 const fmt = (v, digits) => (v === null || v === undefined ? "-" : v.toFixed(digits));
 const list = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -271,9 +273,12 @@ function matrix(results, protocols, { minWidth = 0, limit = Infinity } = {}) {
   const reachable = ranked.filter((c) => c.good).length;
   const rows = ranked.slice(0, limit).map(({ q, rs }) => {
     const seen = rs.find((r) => r.status === "ok") ?? rs.find((r) => r.location);
+    // nickname = exact datacenter; protocols can land on different ones, so list each that connected
+    const nicks = [...new Set(rs.filter((r) => r.status === "ok").map((r) => r.location.split(" - ")[1]).filter(Boolean))];
     return [
       `${flag(q)} ${countryName(q)}`,
       seen?.location?.split(" - ")[0] || dim("-"),
+      nicks.join(", ") || dim("-"),
       ...protocols.map((p) => {
         const r = rs.find((x) => x.protocol === p);
         return !r ? dim("·") : r.status === "ok" ? green("✓") : red("✗");
@@ -281,13 +286,13 @@ function matrix(results, protocols, { minWidth = 0, limit = Infinity } = {}) {
     ];
   });
   return grid(
-    [{ title: "Country" }, { title: "City" }, ...protocols.map((p) => ({ title: p, align: "center" }))],
+    [{ title: "Country" }, { title: "City" }, { title: "Location" }, ...protocols.map((p) => ({ title: p, align: "center" }))],
     rows,
     {
       caption: bold("Availability"),
       captionRight: dim(`${reachable}/${ranked.length} countries reachable${ranked.length > limit ? ` · top ${limit}` : ""}`),
       minWidth,
-      stretch: 1,
+      stretch: 2,
     },
   );
 }
@@ -409,8 +414,8 @@ function pick(saved, timeout) {
       top = Math.max(0, Math.min(top, list.length - height));
 
       const protoLine = PROTOCOLS.map((p, i) =>
-        `${dim(String(i + 1))} ${protos.has(p) ? green("● " + p) : dim("○ " + p)}`).join("   ");
-      const speedLine = `${dim("s")} ${speedTest ? green("● speed test") : dim("○ speed test")}  ${dim(speedTest
+        `${dim(under(String(i + 1)))} ${protos.has(p) ? green("● " + p) : dim("○ " + p)}`).join("   ");
+      const speedLine = `${dim(under("s"))} ${speedTest ? green("● speed test") : dim("○ speed test")}  ${dim(speedTest
         ? "ranks by download speed · adds ~15s per working connection"
         : "off: connect-only, ranks by latency")}`;
       const search = searching
@@ -425,7 +430,7 @@ function pick(saved, timeout) {
         return [`${here ? cyan("❯") : " "} ${mark}`, here ? bold(code) : dim(code), here ? bold(cyan(name)) : name];
       });
       if (!body.length) body.push(["   ", "", dim("no country matches")]);
-      const buttons = [["start", "▶ Start"], ["all", query ? "All shown" : "All"], ["none", query ? "None shown" : "None"], ["quit", "Quit"]];
+      const buttons = [["start", "▶ Start"], ["all", under("A") + (query ? "ll shown" : "ll")], ["none", under("N") + (query ? "one shown" : "one")], ["quit", under("Q") + "uit"]];
       const buttonLine = buttons.map(([id, label]) => (id === "start" ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
@@ -796,7 +801,7 @@ async function main() {
     if (!tty) throw new Error("no terminal for the picker: pass countries with -c");
     const saved = loadConfig();
     if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
-    speedTest = !a["no-speed"] && (saved?.speed ?? true);
+    speedTest = !a["no-speed"] && (saved?.speed ?? false); // first run: connect-only
     const choice = await pick(saved, timeout);
     if (!choice) return;
     countries = choice.countries;
