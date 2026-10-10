@@ -41,8 +41,10 @@ const countryName = (code) => {
   try { return regionName.of(code); } catch { return code; } // city names / nicknames aren't region codes
 };
 // two regional-indicator letters render as the country's flag emoji (Windows has no flag glyphs: it would show
-// two boxed letters of unpredictable width and break the table borders, so leave the slot blank there)
-const flag = (code) => process.platform !== "win32" && /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "  ";
+// two boxed letters of unpredictable width and break the table borders, so leave the slot blank there).
+// macOS Terminal draws flags ~half a column wider than the 2 it advances, nudging table borders right: blank there too
+const noFlags = process.platform === "win32" || process.env.TERM_PROGRAM === "Apple_Terminal";
+const flag = (code) => !noFlags && /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "  ";
 let stop = 0;
 let speedTest = true; // false = connect-only mode: skip the download test, rank by latency
 
@@ -271,28 +273,31 @@ function matrix(results, protocols, { minWidth = 0, limit = Infinity } = {}) {
   const ranked = [...byCountry].map(([q, rs]) => ({ q, rs, good: rs.filter((r) => r.status === "ok").length }))
     .sort((a, b) => b.good - a.good); // stable: ties keep scan order
   const reachable = ranked.filter((c) => c.good).length;
-  const rows = ranked.slice(0, limit).map(({ q, rs }) => {
+  const rows = ranked.slice(0, limit).flatMap(({ q, rs }) => {
     const seen = rs.find((r) => r.status === "ok") ?? rs.find((r) => r.location);
-    // nickname = exact datacenter; protocols can land on different ones, so list each that connected
-    const nicks = [...new Set(rs.filter((r) => r.status === "ok").map((r) => r.location.split(" - ")[1]).filter(Boolean))];
+    // protocols can land on different datacenters (even cities), so list each one that connected, one per line
+    const places = [...new Set(rs.filter((r) => r.status === "ok").map((r) => r.location).filter(Boolean))];
+    const [first = seen?.location?.split(" - ")[0] || dim("-"), ...more] = places;
     return [
-      `${flag(q)} ${countryName(q)}`,
-      seen?.location?.split(" - ")[0] || dim("-"),
-      nicks.join(", ") || dim("-"),
-      ...protocols.map((p) => {
-        const r = rs.find((x) => x.protocol === p);
-        return !r ? dim("·") : r.status === "ok" ? green("✓") : red("✗");
-      }),
+      [
+        `${flag(q)} ${countryName(q)}`,
+        first,
+        ...protocols.map((p) => {
+          const r = rs.find((x) => x.protocol === p);
+          return !r ? dim("·") : r.status === "ok" ? green("✓") : red("✗");
+        }),
+      ],
+      ...more.map((place) => ["", place, ...protocols.map(() => "")]),
     ];
-  });
+  }).slice(0, limit);
   return grid(
-    [{ title: "Country" }, { title: "City" }, { title: "Location" }, ...protocols.map((p) => ({ title: p, align: "center" }))],
+    [{ title: "Country" }, { title: "Location(s)" }, ...protocols.map((p) => ({ title: p, align: "center" }))],
     rows,
     {
       caption: bold("Availability"),
       captionRight: dim(`${reachable}/${ranked.length} countries reachable${ranked.length > limit ? ` · top ${limit}` : ""}`),
       minWidth,
-      stretch: 2,
+      stretch: 1,
     },
   );
 }

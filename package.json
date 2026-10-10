@@ -1,6 +1,6 @@
 {
   "name": "windscout",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Find which Windscribe locations and protocols work from your network, ranked by speed (unofficial)",
   "type": "module",
   "bin": {

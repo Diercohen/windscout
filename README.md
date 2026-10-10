@@ -4,6 +4,8 @@ Find which Windscribe locations and protocols actually work from your network, r
 
 WindScout drives the official `windscribe-cli`: it connects to each country × protocol pair, measures latency and download speed through the tunnel, disconnects, and prints a ranked table.
 
+![WindScout picking countries, scanning, and printing the availability grid and ranked results](demo.gif)
+
 > Unofficial tool, not affiliated with Windscribe.
 
 ## Requirements
@@ -27,6 +29,7 @@ Run `windscout` with no arguments to open the interactive picker:
 ```
 ╭─ WindScout ──────────────────────────────────── 2/68 selected ─╮
 │ 1 ● wireguard   2 ● stealth   3 ○ wstunnel   4 ● udp   5 ● tcp │
+│ s ○ speed test  off: connect-only, ranks by latency            │
 ╰────────────────────────────────────────────────────────────────╯
 ╭────────────────────────────────────────────────────────────────╮
 │ 🔍 an▏                                              1–16 of 18 │
@@ -51,7 +54,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
 
-**Mouse:** click a country to select or unselect it, click a protocol or the speed-test line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys. This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
+**Mouse:** click a country to select or unselect it, click a protocol or the speed-test line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys; the shortcut key is underlined on screen (on the buttons, the protocol numbers and `s`). This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
 
 Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
@@ -73,25 +76,26 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-p, --protocols` | comma-separated: `wireguard`, `ikev2` (macOS and Windows), `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all |
 | `-t, --timeout` | seconds to wait for each connection | 20 |
 | `-a, --all` | include failed attempts in the final table | off |
-| `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | saved, or off |
+| `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-v, --version` | print the installed version, and the update command if a newer one is on npm | |
 
 ## Connect-only mode
 
-Often you only need to know **what connects**, not how fast it is. Turn the speed test off with `s` in the picker or with `--no-speed`. Each working connection is then checked with a quick latency test only. That saves about 15 s per working connection, and results are ranked by latency. The choice is remembered.
+Often you only need to know **what connects**, not how fast it is. Turn the speed test off with `s` in the picker or with `--no-speed`. Each working connection is then checked with a quick latency test only. That saves about 15 s per working connection, and results are ranked by latency. Connect-only is the default on the first run, and the choice is remembered.
 
-Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet):
+Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet). Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
 
 ```
-╭────────────────────────────────────────────────────────────────────────╮
-│ Availability                                   2/3 countries reachable │
-├─────────────────────────┬──────────────────┬─────────┬───────────┬─────┤
-│ Country                 │ City             │ stealth │ wireguard │ tcp │
-├─────────────────────────┼──────────────────┼─────────┼───────────┼─────┤
-│ 🇩🇪 Germany              │ Frankfurt        │    ✓    │     ✓     │  ✓  │
-│ 🇳🇱 Netherlands          │ Amsterdam        │    ✓    │     ✓     │  ·  │
-│ 🇦🇪 United Arab Emirates │ Dubai            │    ✗    │     ✗     │  ✗  │
-╰─────────────────────────┴──────────────────┴─────────┴───────────┴─────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Availability                                         2/3 countries reachable │
+├─────────────────────────┬────────────────────────┬─────────┬───────────┬─────┤
+│ Country                 │ Location(s)            │ stealth │ wireguard │ tcp │
+├─────────────────────────┼────────────────────────┼─────────┼───────────┼─────┤
+│ 🇩🇪 Germany              │ Frankfurt - Castle     │    ✓    │     ✓     │  ✓  │
+│                         │ Frankfurt - Wurst      │         │           │     │
+│ 🇳🇱 Netherlands          │ Amsterdam - Tulip      │    ✓    │     ✓     │  ·  │
+│ 🇦🇪 United Arab Emirates │ Dubai                  │    ✗    │     ✗     │  ✗  │
+╰─────────────────────────┴────────────────────────┴─────────┴───────────┴─────╯
 ```
 
 While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. In connect-only mode the scan starts on the availability grid.
@@ -127,9 +131,10 @@ At the end, the results, a per-protocol summary and the best pick are printed to
 
 ## Notes
 
-- **Connecting by country picks a random datacenter.** A single run tests one per country. Pass city names or nicknames with `-c` to test specific datacenters.
+- **Connecting by country picks a random datacenter.** A single run tests one per country and protocol, so different protocols may land on different datacenters. Pass city names or nicknames with `-c` to test specific datacenters.
 - **The country list is built in.** On v2.24, `windscribe-cli locations` returns nothing, so WindScout uses a fixed list of country codes. Codes Windscribe doesn't serve are skipped quickly.
 - **A full scan takes a while.** The worst case is countries × protocols × timeout. Narrow it with `-c` and `-p`.
+- **No flags in macOS Terminal.** Terminal.app draws flag emoji wider than their space, which pushes table borders out of line, so WindScout leaves them out there (as on Windows). iTerm2 and other terminals show them.
 - **Your connection changes during the scan.** WindScout connects and disconnects the VPN repeatedly, so don't run it while you need a stable connection.
 
 ## License
