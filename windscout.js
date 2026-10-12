@@ -150,6 +150,9 @@ async function probe(query, protocol, timeout, onStep = () => {}) {
   } finally {
     onStep("disconnecting");
     await cli("disconnect");
+    // the CLI's disconnect can return while the app is still tearing down (it does after a timed-out connect);
+    // a connect sent then is swallowed and the next attempt reads as an instant "failed", so wait it out
+    for (let i = 0; i < 30 && (await state()) === "Disconnecting"; i++) await sleep(1000);
   }
 }
 
