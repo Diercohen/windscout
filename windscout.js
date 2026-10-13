@@ -841,7 +841,8 @@ async function main() {
     const saved = loadConfig();
     if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
     speedTest = !a["no-speed"] && (saved?.speed ?? false); // first run: connect-only
-    firewall = a.firewall || (saved?.firewall ?? false);
+    // already on in the app: show it on, since the scan won't turn it off
+    firewall = a.firewall || /^Firewall state: On/m.test(status) || (saved?.firewall ?? false);
     const choice = await pick(saved, timeout);
     if (!choice) return;
     countries = choice.countries;
