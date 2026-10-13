@@ -3,6 +3,7 @@
 // Drives the official windscribe-cli: connects to each country/protocol pair,
 // measures latency and download speed through the tunnel, prints a ranked table.
 import { createInterface } from "node:readline";
+import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { CONFIG, DEFAULT_TIMEOUT, loadConfig, MIN_TIMEOUT } from "./config.js";
 import type { Result } from "./probe.js";
@@ -13,7 +14,7 @@ import { command, report, target } from "./tui/report.js";
 import { leaveScreen, out } from "./tui/terminal.js";
 import { cyan, green, yellow } from "./tui/text.js";
 import { now, sleep } from "./time.js";
-import { checkUpdate, updateNotice, VERSION } from "./update.js";
+import { checkUpdate, UPDATE_COMMAND, updateNotice, VERSION, viaNpx } from "./update.js";
 import { blockInternet, CLI, connectState, isFirewallOn, PROTOCOLS, restoreFirewall, waitForLogin, windscribe } from "./windscribe.js";
 
 const HELP = `Usage: windscout [options]
@@ -28,7 +29,7 @@ Options:
   -a, --all             also show failed attempts in the final table
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
   -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
-  -v, --version         show the installed version (and whether a newer one is out)
+  -v, --version         show the installed version (and offer to update if a newer one is out)
   -h, --help            show this help
 
 Selection is stored in ${CONFIG}
@@ -83,7 +84,14 @@ async function main(): Promise<void> {
     console.log(`windscout ${VERSION}`);
     await checkUpdate();
     const notice = updateNotice();
-    if (notice) console.error(yellow(notice));
+    if (!notice) return;
+    console.error(yellow(notice));
+    if (process.stdin.isTTY && out.isTTY && !viaNpx() && /^y(es)?$/i.test(await ask("update now? (y/n) "))) {
+      console.log(cyan(UPDATE_COMMAND));
+      // shell: npm is npm.cmd on Windows
+      const { status } = spawnSync(UPDATE_COMMAND, { shell: true, stdio: "inherit" });
+      if (status) process.exitCode = status;
+    }
     return;
   }
   let timeout = a.timeout ? Number(a.timeout) : undefined;

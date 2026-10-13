@@ -21,9 +21,12 @@ export function checkUpdate(): Promise<void> {
   return check;
 }
 
+// run through npx: there's nothing installed to update, the next npx windscout@latest fetches it
+export const viaNpx = () => process.env.npm_command === "exec";
+export const UPDATE_COMMAND = "npm install -g windscout@latest";
+
 /** "update available: …" with the command to run, once checkUpdate() found a newer version */
 export function updateNotice(): string | null {
   if (!latest) return null;
-  return `update available: ${VERSION} → ${latest} · run: ${
-    process.env.npm_command === "exec" ? "npx windscout@latest" : "npm install -g windscout@latest"}`;
+  return `update available: ${VERSION} → ${latest} · run: ${viaNpx() ? "npx windscout@latest" : UPDATE_COMMAND}`;
 }

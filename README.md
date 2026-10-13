@@ -79,7 +79,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
-| `-v, --version` | print the installed version, and the update command if a newer one is on npm | |
+| `-v, --version` | print the installed version; if a newer one is on npm, show the update command and ask (y/n) to run it | |
 
 ## Connect-only mode
 
