@@ -143,6 +143,17 @@ At the end, the results, a per-protocol summary and the best pick are printed to
 - **No flags in macOS Terminal.** Terminal.app draws flag emoji wider than their space, which pushes table borders out of line, so WindScout leaves them out there (as on Windows). iTerm2 and other terminals show them.
 - **Your connection changes during the scan.** WindScout connects and disconnects the VPN repeatedly, so don't run it while you need a stable connection.
 
+## Development
+
+The source is TypeScript in `src/`. It compiles to `dist/`, which is what gets published.
+
+```sh
+npm install
+npm run build       # compile src/ to dist/ (the windscout command is dist/cli.js)
+node dist/cli.js    # run your build; takes the same options as windscout
+./publish.sh        # build, install the packed tarball to check it runs, publish to npm (bump the version first)
+```
+
 ## License
 
 MIT

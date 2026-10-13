@@ -5,12 +5,13 @@
 # Only the iTerm2 window is captured, so other windows on top don't end up in the GIF.
 set -u
 cd "$(dirname "$0")"
+npm run --silent build || exit 1
 T=$(mktemp -d)
 W=1100 H=800
 
 cat > "$T/setup.sh" <<EOF
 export PS1='\$ ' XDG_CONFIG_HOME=$T/config
-alias windscout='$(command -v node) $PWD/windscout.js'
+alias windscout='$(command -v node) $PWD/dist/cli.js'
 clear
 EOF
 
