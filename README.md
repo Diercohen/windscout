@@ -51,6 +51,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `a` / `n` | select all / unselect all (only the matching countries while a search is active) |
 | `1`–`6` | toggle a protocol (`1`–`5` on Linux, which has no IKEv2) |
 | `s` | toggle the speed test (off = connect-only mode) |
+| `f` | toggle "block internet while scanning" (firewall) |
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
 
@@ -77,6 +78,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-t, --timeout` | seconds to wait for each connection | 20 |
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
+| `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
 | `-v, --version` | print the installed version, and the update command if a newer one is on npm | |
 
 ## Connect-only mode
@@ -99,6 +101,10 @@ Both modes show an **availability grid**: one row per country, and ✓ / ✗ for
 ```
 
 While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. Press `p` (or `space`) to pause: the current attempt finishes, the VPN disconnects, and the scan waits until you press `p` again. Paused time doesn't count toward elapsed or remaining. In connect-only mode the scan starts on the availability grid.
+
+## Block internet while scanning (firewall)
+
+Between attempts the VPN is disconnected for a moment, and apps on your computer (browser, messengers, updates) can go online over your real connection. Turn on **block internet while scanning** with `f` in the picker or `--firewall`, and WindScout switches on the Windscribe app's firewall for the scan: nothing gets online except through the VPN. When the scan ends or you stop it, the firewall goes back off (if you already had it on, WindScout leaves it on). While a scan is paused, the firewall keeps blocking.
 
 ## Output
 

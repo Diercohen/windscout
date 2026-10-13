@@ -47,6 +47,8 @@ const noFlags = process.platform === "win32" || process.env.TERM_PROGRAM === "Ap
 const flag = (code) => !noFlags && /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "  ";
 let stop = 0;
 let speedTest = true; // false = connect-only mode: skip the download test, rank by latency
+let firewall = false; // turn on the app's firewall while scanning, so nothing goes online outside the VPN
+let restoreFirewall = async () => {}; // set by scan(); also called on a crash so the internet isn't left blocked
 
 // ---------- windscribe + measurements ----------
 
@@ -314,6 +316,7 @@ function loadConfig() {
       countries: (c.countries ?? []).filter((x) => COUNTRIES.includes(x)),
       protocols: (c.protocols ?? []).filter((x) => PROTOCOLS.includes(x)),
       speed: c.speed !== false,
+      firewall: c.firewall === true,
     };
   } catch {
     return null; // first run or unreadable file
@@ -415,7 +418,7 @@ function pick(saved, timeout) {
     const render = () => {
       const rows = out.rows || 24;
       const list = visible();
-      const height = Math.max(3, rows - 19 - (update ? 1 : 0));
+      const height = Math.max(3, rows - 20 - (update ? 1 : 0));
       cursor = Math.max(0, Math.min(cursor, list.length - 1));
       if (cursor < top) top = cursor;
       if (cursor >= top + height) top = cursor - height + 1;
@@ -426,6 +429,10 @@ function pick(saved, timeout) {
       const speedLine = `${dim(under("s"))} ${speedTest ? green("● speed test") : dim("○ speed test")}  ${dim(speedTest
         ? "ranks by download speed · adds ~15s per working connection"
         : "off: connect-only, ranks by latency")}`;
+      const fwLabel = "block internet while scanning (firewall)";
+      const fwLine = `${dim(under("f"))} ${firewall ? green("● " + fwLabel) : dim("○ " + fwLabel)}  ${dim(firewall
+        ? "only VPN traffic gets through"
+        : "off: apps may leak in between")}`;
       const search = searching
         ? `${cyan("🔍")} ${bold(query)}${cyan("▏")}`
         : query ? `🔍 ${query}` : dim("🔍 press / to search");
@@ -442,9 +449,9 @@ function pick(saved, timeout) {
       const buttonLine = buttons.map(([id, label]) => (id === "start" ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
-        { caption: search, captionRight: dim(range), minWidth: Math.max(vw(protoLine), vw(speedLine)) + 4 });
+        { caption: search, captionRight: dim(range), minWidth: Math.max(vw(protoLine), vw(speedLine), vw(fwLine)) + 4 });
       const width = vw(table[0]);
-      const head = box([protoLine, speedLine], {
+      const head = box([protoLine, speedLine, fwLine], {
         title: bold(cyan("WindScout")),
         right: `${bold(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
@@ -460,7 +467,7 @@ function pick(saved, timeout) {
         centerIn(dim(searching
           ? "type to filter · ↑↓ move · enter/esc done"
           : `↑↓ move · space select · a/n ${query ? "all/none shown" : "all/none"} · / search`), width),
-        centerIn(dim(searching ? "" : `1-${PROTOCOLS.length} protocols · s speed test · enter start · ${query ? "esc clear · " : ""}q quit`), width),
+        centerIn(dim(searching ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · enter start · ${query ? "esc clear · " : ""}q quit`), width),
       ];
       lines.splice(head.length + table.length + 1, 0, centerIn(buttonLine, width), "");
       if (message) lines.push(centerIn(yellow(message), width));
@@ -485,7 +492,7 @@ function pick(saved, timeout) {
         return range;
       });
       hit = {
-        protoRow: y0 + 1, speedRow: y0 + 2, protoHits,
+        protoRow: y0 + 1, speedRow: y0 + 2, firewallRow: y0 + 3, protoHits,
         searchRow: y0 + head.length + 1,
         firstRow: y0 + head.length + 5, shown: shown.length,
         buttonRow: y0 + head.length + table.length + 1, buttonHits,
@@ -510,6 +517,7 @@ function pick(saved, timeout) {
         countries: COUNTRIES.filter((c) => selected.has(c)),
         protocols: PROTOCOLS.filter((p) => protos.has(p)),
         speed: speedTest,
+        firewall,
       };
       saveConfig(choice);
       finish(choice);
@@ -535,6 +543,7 @@ function pick(saved, timeout) {
           const i = hit.protoHits.findIndex(([a, b]) => x >= a && x < b);
           if (i >= 0) protos.has(PROTOCOLS[i]) ? protos.delete(PROTOCOLS[i]) : protos.add(PROTOCOLS[i]);
         } else if (y === hit.speedRow) speedTest = !speedTest;
+        else if (y === hit.firewallRow) firewall = !firewall;
         else if (y === hit.buttonRow) {
           const id = hit.buttonHits.find(([, a, b]) => x >= a && x < b)?.[0];
           if (id === "start" && start()) return;
@@ -578,6 +587,7 @@ function pick(saved, timeout) {
       else if (k === "a") list.forEach((c) => selected.add(c));
       else if (k === "n") list.forEach((c) => selected.delete(c));
       else if (k === "s") speedTest = !speedTest;
+      else if (k === "f") firewall = !firewall;
       else if (/^[1-9]$/.test(str ?? "") && PROTOCOLS[Number(str) - 1]) {
         const p = PROTOCOLS[Number(str) - 1];
         protos.has(p) ? protos.delete(p) : protos.add(p);
@@ -601,6 +611,10 @@ async function scan(countries, protocols, timeout, tty) {
   let view = speedTest ? "ranking" : "availability"; // tab switches
   // pause lands between attempts, so the VPN is disconnected while waiting; idle = seconds spent paused
   let paused = false, waiting = false, waitStart = 0, idle = 0, resume = () => {};
+  // firewall: block everything outside the VPN while switching locations; put it back the way the user had it
+  const fwChanged = firewall && /^Firewall state: Off/m.test(await cli("status"));
+  if (fwChanged) await cli("firewall", "on");
+  restoreFirewall = async () => { if (fwChanged) await cli("firewall", "off"); };
 
   const render = () => {
     const rows = out.rows || 24;
@@ -642,9 +656,9 @@ async function scan(countries, protocols, timeout, tty) {
       "",
       stop
         ? yellow(" stopping after the current attempt…")
-        : waiting ? yellow(" paused · VPN disconnected · press p to resume")
+        : waiting ? yellow(` paused · VPN disconnected${fwChanged ? " · firewall blocking internet" : ""} · press p to resume`)
         : ` ${cyan(spinner)} ${bold(current)}`,
-      stop || waiting ? "" : `   ${dim(step)} ${dim("·")} ${duration(now() - attemptStart)}${paused ? yellow(" · pausing after this attempt") : ""}`,
+      stop || waiting ? "" : `   ${dim(step)} ${dim("·")} ${duration(now() - attemptStart)}${paused && frame % 8 < 5 ? yellow(" · pausing after this attempt") : ""}`,
       null,
       centerIn(stats, inner),
     ], {
@@ -668,7 +682,7 @@ async function scan(countries, protocols, timeout, tty) {
   let timer;
   if (tty) {
     if (!fullscreen) enterScreen();
-    input.on("keypress", (str, key = {}) => {
+    input.on("keypress", async (str, key = {}) => {
       if (key.name === "tab") {
         view = view === "ranking" ? "availability" : "ranking";
         render();
@@ -680,6 +694,7 @@ async function scan(countries, protocols, timeout, tty) {
         if (stop++) { // second press: bail out now
           leaveScreen();
           console.error(`stopped. the VPN may still be connecting: run '${CLI} disconnect'`);
+          await restoreFirewall();
           process.exit(130);
         }
         resume(); // a paused scan stops right away
@@ -689,7 +704,7 @@ async function scan(countries, protocols, timeout, tty) {
     out.on("resize", render);
     timer = setInterval(render, 120);
   } else {
-    process.on("SIGINT", () => { if (stop++) process.exit(130); });
+    process.on("SIGINT", async () => { if (stop++) await restoreFirewall(), process.exit(130); });
   }
 
   outer: for (const loc of countries) {
@@ -711,6 +726,7 @@ async function scan(countries, protocols, timeout, tty) {
     }
     finishedCountries.push(loc); // table/failed list refresh per finished country
   }
+  await restoreFirewall();
 
   if (tty) {
     clearInterval(timer);
@@ -780,6 +796,7 @@ Options:
   -t, --timeout SEC     seconds to wait for each connection (default: 20)
   -a, --all             also show failed attempts in the final table
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
+  -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
   -v, --version         show the installed version (and whether a newer one is out)
   -h, --help            show this help
 
@@ -796,6 +813,7 @@ async function main() {
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
       "no-speed": { type: "boolean", short: "n", default: false },
+      firewall: { type: "boolean", short: "f", default: false },
     },
   });
   if (a.help) return console.log(HELP);
@@ -823,13 +841,14 @@ async function main() {
     const saved = loadConfig();
     if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
     speedTest = !a["no-speed"] && (saved?.speed ?? false); // first run: connect-only
+    firewall = a.firewall || (saved?.firewall ?? false);
     const choice = await pick(saved, timeout);
     if (!choice) return;
     countries = choice.countries;
     protocols = protocols ?? choice.protocols;
   }
   protocols ??= PROTOCOLS;
-  if (a.countries) speedTest = !a["no-speed"];
+  if (a.countries) speedTest = !a["no-speed"], firewall = a.firewall;
 
   const results = await scan(countries, protocols, timeout, tty);
   if (stop) console.log(yellow("interrupted, showing partial results"));
@@ -838,8 +857,9 @@ async function main() {
   if (update) console.error("\n" + yellow(updateNotice()));
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   leaveScreen();
   console.error(`windscout: ${e.message}`);
+  await restoreFirewall().catch(() => console.error(`the firewall may still be on: run '${CLI} firewall off'`));
   process.exit(1);
 });
