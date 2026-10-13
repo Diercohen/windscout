@@ -2,16 +2,19 @@
 // WindScout: find which Windscribe locations and protocols actually work from here.
 // Drives the official windscribe-cli: connects to each country/protocol pair,
 // measures latency and download speed through the tunnel, prints a ranked table.
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { CONFIG, DEFAULT_TIMEOUT, loadConfig, MIN_TIMEOUT } from "./config.js";
+import type { Result } from "./probe.js";
 import { Scan } from "./scan.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
-import { report } from "./tui/report.js";
+import { command, report, target } from "./tui/report.js";
 import { leaveScreen, out } from "./tui/terminal.js";
-import { yellow } from "./tui/text.js";
+import { cyan, green, yellow } from "./tui/text.js";
+import { now, sleep } from "./time.js";
 import { checkUpdate, updateNotice, VERSION } from "./update.js";
-import { blockInternet, CLI, isFirewallOn, PROTOCOLS, restoreFirewall, waitForLogin } from "./windscribe.js";
+import { blockInternet, CLI, connectState, isFirewallOn, PROTOCOLS, restoreFirewall, waitForLogin, windscribe } from "./windscribe.js";
 
 const HELP = `Usage: windscout [options]
 
@@ -33,6 +36,33 @@ Example: windscout -c DE,NL,TR -p stealth,tcp:443`;
 
 // "DE, NL,,TR" → ["DE", "NL", "TR"]
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+
+const ask = (question: string) => new Promise<string>((resolve) => {
+  const rl = createInterface({ input: process.stdin, output: out });
+  rl.on("SIGINT", () => rl.close()); // Ctrl-C / Ctrl-D: same as enter
+  rl.on("close", () => resolve(""));
+  rl.question(question, (a) => (resolve(a.trim()), rl.close()));
+});
+
+/** Asks which numbered connection to make, then runs its command and waits for it to connect */
+async function offerConnect(choices: Result[], timeout: number): Promise<void> {
+  const others = choices.length > 1 ? `, 1-${choices.length - 1} = other` : "";
+  for (;;) {
+    const a = await ask(`\nconnect to # (0 = best${others}, enter to quit): `);
+    if (!a) return;
+    const r = /^\d+$/.test(a) ? choices[Number(a)] : undefined;
+    if (!r) {
+      console.log(yellow(`no #${a} in the tables`));
+      continue;
+    }
+    console.log(cyan(command(r)));
+    await windscribe("connect", target(r), r.protocol);
+    let state = "";
+    for (const t = now(); now() - t < timeout && !(state = await connectState()).startsWith("Connected");) await sleep(1000);
+    console.log(state.startsWith("Connected") ? green(state) : yellow(`${state || "not connected"} after ${timeout} s`));
+    return;
+  }
+}
 
 async function main(): Promise<void> {
   const { values: a } = parseArgs({
@@ -92,10 +122,11 @@ async function main(): Promise<void> {
   await restoreFirewall();
   view.close();
   if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
-  report(scan.results, protocols, { all: a.all, speedTest });
+  const choices = report(scan.results, protocols, { all: a.all, speedTest });
   await checkUpdate();
   const notice = updateNotice();
   if (notice) console.error("\n" + yellow(notice));
+  if (tty && choices.length) await offerConnect(choices, timeout);
 }
 
 main().catch(async (e) => {
