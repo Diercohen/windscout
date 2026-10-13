@@ -4,6 +4,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
+export const DEFAULT_TIMEOUT = 20;
+export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that would have worked
+
 export const CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "windscout", "config.json");
 
 export interface Choice {
@@ -11,6 +14,7 @@ export interface Choice {
   protocols: string[];
   speed: boolean; // speed test on
   firewall: boolean; // block internet while scanning
+  timeout: number; // seconds to wait for each connection
 }
 
 /** The saved choice, minus anything this version doesn't offer; null on first run or an unreadable file */
@@ -22,6 +26,7 @@ export function loadConfig(): Choice | null {
       protocols: (c.protocols ?? []).filter((x: string) => PROTOCOLS.includes(x)),
       speed: c.speed !== false,
       firewall: c.firewall === true,
+      timeout: c.timeout >= MIN_TIMEOUT ? c.timeout : DEFAULT_TIMEOUT,
     };
   } catch {
     return null;

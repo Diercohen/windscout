@@ -3,7 +3,7 @@
 // Drives the official windscribe-cli: connects to each country/protocol pair,
 // measures latency and download speed through the tunnel, prints a ranked table.
 import { parseArgs } from "node:util";
-import { CONFIG, loadConfig } from "./config.js";
+import { CONFIG, DEFAULT_TIMEOUT, loadConfig, MIN_TIMEOUT } from "./config.js";
 import { Scan } from "./scan.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
@@ -21,7 +21,7 @@ Without -c it opens an interactive country picker (your selection is remembered)
 Options:
   -c, --countries LIST  comma-separated ISO codes, city names or nicknames (skips the picker)
   -p, --protocols LIST  comma-separated protocols, optional :port (default: ${PROTOCOLS.join(",")})
-  -t, --timeout SEC     seconds to wait for each connection (default: 20)
+  -t, --timeout SEC     seconds to wait for each connection, at least ${MIN_TIMEOUT} (default: saved, or ${DEFAULT_TIMEOUT})
   -a, --all             also show failed attempts in the final table
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
   -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
     options: {
       countries: { type: "string", short: "c" },
       protocols: { type: "string", short: "p" },
-      timeout: { type: "string", short: "t", default: "20" },
+      timeout: { type: "string", short: "t" },
       all: { type: "boolean", short: "a", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -56,8 +56,8 @@ async function main(): Promise<void> {
     if (notice) console.error(yellow(notice));
     return;
   }
-  const timeout = Number(a.timeout);
-  if (!(timeout > 0)) throw new Error("--timeout must be a positive number");
+  let timeout = a.timeout ? Number(a.timeout) : undefined;
+  if (timeout !== undefined && !(timeout >= MIN_TIMEOUT)) throw new Error(`--timeout must be at least ${MIN_TIMEOUT} seconds`);
 
   const status = await waitForLogin();
   const tty = Boolean(process.stdin.isTTY && out.isTTY);
@@ -70,7 +70,7 @@ async function main(): Promise<void> {
     const saved = loadConfig();
     if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
     const choice = await pick(saved, {
-      timeout,
+      timeout: timeout ?? saved?.timeout ?? DEFAULT_TIMEOUT,
       speedTest: speedTest && (saved?.speed ?? false), // first run: connect-only
       // already on in the app: show it on, since the scan won't turn it off
       firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
@@ -80,8 +80,10 @@ async function main(): Promise<void> {
     protocols ??= choice.protocols;
     speedTest = choice.speed;
     firewall = choice.firewall;
+    timeout = choice.timeout;
   }
   protocols ??= PROTOCOLS;
+  timeout ??= DEFAULT_TIMEOUT;
 
   const scan = new Scan(countries, protocols, { timeout, speedTest });
   const blocking = firewall && (await blockInternet());

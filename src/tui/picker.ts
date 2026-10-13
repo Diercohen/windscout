@@ -1,6 +1,6 @@
-// Screen 1: pick countries, protocols, speed test and firewall, by keyboard or mouse.
+// Screen 1: pick countries, protocols, speed test, firewall and timeout, by keyboard or mouse.
 import type { Key } from "node:readline";
-import { saveConfig, type Choice } from "../config.js";
+import { MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
 import { attemptSeconds, estimate } from "../scan.js";
 import { duration } from "../time.js";
 import { checkUpdate, updateNotice } from "../update.js";
@@ -11,8 +11,8 @@ import { bold, cyan, dim, green, under, vw, yellow } from "./text.js";
 import { box, centerIn, grid } from "./widgets.js";
 
 export interface PickerOptions {
-  timeout: number; // for the time estimate
-  speedTest: boolean; // initial state of the toggles
+  timeout: number; // initial state of the settings
+  speedTest: boolean;
   firewall: boolean;
 }
 
@@ -24,6 +24,7 @@ interface Hits {
   protoHits: [number, number][]; // [from, to) columns of each protocol
   speedRow: number;
   firewallRow: number;
+  timeoutRow: number;
   searchRow: number;
   firstRow: number; // first country row
   shown: number; // country rows on screen
@@ -38,6 +39,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
   const selected = new Set(saved?.countries ?? []);
   const protos = new Set(saved?.protocols.length ? saved.protocols : PROTOCOLS);
   let cursor = 0, top = 0, message = "", query = "", searching = false;
+  let seconds = String(timeout), editing = false; // the timeout, as typed
   let hit: Hits;
   const visible = () => {
     const q = query.toLowerCase();
@@ -50,7 +52,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       const rows = out.rows || 24;
       const notice = updateNotice();
       const matches = visible();
-      const height = Math.max(3, rows - 20 - (notice ? 1 : 0));
+      const height = Math.max(3, rows - 21 - (notice ? 1 : 0));
       cursor = Math.max(0, Math.min(cursor, matches.length - 1));
       if (cursor < top) top = cursor;
       if (cursor >= top + height) top = cursor - height + 1;
@@ -65,6 +67,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       const fwLine = `${dim(under("f"))} ${firewall ? green("● " + fwLabel) : dim("○ " + fwLabel)}  ${dim(firewall
         ? "only VPN traffic gets through"
         : "off: apps may leak in between")}`;
+      timeout = Number(seconds);
+      const short = timeout < MIN_TIMEOUT;
+      const timeoutLine = `${dim(under("t"))} timeout ${editing ? bold(seconds) + cyan("▏") : (short ? yellow : bold)(seconds || "?")} s  ${dim(`per connection · at least ${MIN_TIMEOUT}`)}`;
       const search = searching
         ? `${cyan("🔍")} ${bold(query)}${cyan("▏")}`
         : query ? `🔍 ${query}` : dim("🔍 press / to search");
@@ -86,9 +91,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       const buttonLine = buttons.map(([id, label]) => (id === "start" ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
-        { caption: search, captionRight: dim(range), minWidth: Math.max(vw(protoLine), vw(speedLine), vw(fwLine)) + 4 });
+        { caption: search, captionRight: dim(range), minWidth: Math.max(vw(protoLine), vw(speedLine), vw(fwLine), vw(timeoutLine)) + 4 });
       const width = vw(table[0]);
-      const head = box([protoLine, speedLine, fwLine], {
+      const head = box([protoLine, speedLine, fwLine, timeoutLine], {
         title: bold(cyan("WindScout")),
         right: `${bold(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
@@ -103,10 +108,12 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         centerIn(n
           ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(estimate(selected.size, protos.size, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each)`)}`
           : yellow("select at least one country and one protocol"), width),
-        centerIn(dim(searching
+        centerIn(dim(editing
+          ? "type the seconds to wait for each connection · enter/esc done"
+          : searching
           ? "type to filter · ↑↓ move · enter/esc done"
           : `↑↓ move · space select · a/n ${query ? "all/none shown" : "all/none"} · / search`), width),
-        centerIn(dim(searching ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · enter start · ${query ? "esc clear · " : ""}q quit`), width),
+        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · t timeout · enter start · ${query ? "esc clear · " : ""}q quit`), width),
       ];
       if (message) lines.push(centerIn(yellow(message), width));
       lines.push("", centerIn(dim(repoLink), width));
@@ -129,7 +136,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         return range;
       });
       hit = {
-        protoRow: at.top + 1, protoHits, speedRow: at.top + 2, firewallRow: at.top + 3,
+        protoRow: at.top + 1, protoHits, speedRow: at.top + 2, firewallRow: at.top + 3, timeoutRow: at.top + 4,
         searchRow: at.top + head.length + 1,
         firstRow: at.top + head.length + 5, shown: shown.length,
         buttonRow: at.top + head.length + table.length + 1, buttonHits,
@@ -152,12 +159,17 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         message = "nothing to scan yet";
         return false;
       }
+      if (!(timeout >= MIN_TIMEOUT)) {
+        message = `the timeout must be at least ${MIN_TIMEOUT} seconds`;
+        return false;
+      }
       // keep the user's order of preference stable: list order
       const choice: Choice = {
         countries: COUNTRIES.filter((c) => selected.has(c)),
         protocols: PROTOCOLS.filter((p) => protos.has(p)),
         speed: speedTest,
         firewall,
+        timeout,
       };
       saveConfig(choice);
       finish(choice);
@@ -172,9 +184,10 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       if (m.button === 64) cursor = Math.max(0, cursor - 3); // wheel up
       else if (m.button === 65) cursor = Math.min(matches.length - 1, cursor + 3); // wheel down
       else if (m.button !== 0) return; // left button only
-      else if (y === hit.searchRow) searching = true;
+      else if (y === hit.searchRow) searching = true, editing = false;
+      else if (y === hit.timeoutRow) editing = true, searching = false;
       else {
-        searching = false; // clicking anywhere else ends typing, like leaving a text field
+        searching = editing = false; // clicking anywhere else ends typing, like leaving a text field
         if (y >= hit.firstRow && y < hit.firstRow + hit.shown) {
           cursor = top + (y - hit.firstRow);
           const c = matches[cursor];
@@ -212,7 +225,11 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       else if (k === "down") cursor = Math.min(matches.length - 1, cursor + 1);
       else if (k === "pageup") cursor = Math.max(0, cursor - 10);
       else if (k === "pagedown") cursor = Math.min(matches.length - 1, cursor + 10);
-      else if (searching) {
+      else if (editing) {
+        if (k === "return" || k === "escape") editing = false;
+        else if (k === "backspace") seconds = seconds.slice(0, -1);
+        else if (/^[0-9]$/.test(str ?? "") && seconds.length < 4) seconds = seconds === "0" ? str! : seconds + str;
+      } else if (searching) {
         // typing goes into the search box; letters are not shortcuts here
         if (k === "return" || k === "escape") searching = false;
         else if (k === "backspace") query = query.slice(0, -1), cursor = 0;
@@ -228,6 +245,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       else if (k === "n") matches.forEach((c) => selected.delete(c));
       else if (k === "s") speedTest = !speedTest;
       else if (k === "f") firewall = !firewall;
+      else if (k === "t") editing = true, seconds = "";
       else if (/^[1-9]$/.test(str ?? "") && PROTOCOLS[Number(str) - 1]) flip(protos, PROTOCOLS[Number(str) - 1]);
       else if (k === "escape" && query) query = "", cursor = 0;
       else if (k === "return") {
