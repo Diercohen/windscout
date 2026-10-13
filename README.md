@@ -98,7 +98,7 @@ Both modes show an **availability grid**: one row per country, and ✓ / ✗ for
 ╰─────────────────────────┴────────────────────────┴─────────┴───────────┴─────╯
 ```
 
-While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. In connect-only mode the scan starts on the availability grid.
+While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. Press `p` (or `space`) to pause: the current attempt finishes, the VPN disconnects, and the scan waits until you press `p` again. Paused time doesn't count toward elapsed or remaining. In connect-only mode the scan starts on the availability grid.
 
 ## Output
 

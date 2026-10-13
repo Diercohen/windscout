@@ -599,12 +599,14 @@ async function scan(countries, protocols, timeout, tty) {
   const started = now();
   let done = 0, attemptStart = now(), current = "", step = "", frame = 0, finishedCountries = [];
   let view = speedTest ? "ranking" : "availability"; // tab switches
+  // pause lands between attempts, so the VPN is disconnected while waiting; idle = seconds spent paused
+  let paused = false, waiting = false, waitStart = 0, idle = 0, resume = () => {};
 
   const render = () => {
     const rows = out.rows || 24;
-    const elapsed = now() - started;
+    const elapsed = now() - started - idle - (waiting ? now() - waitStart : 0);
     // smooth bar: count the running attempt as partially done
-    const partial = Math.min(0.95, (now() - attemptStart) / attemptSeconds(timeout));
+    const partial = waiting ? 0 : Math.min(0.95, (now() - attemptStart) / attemptSeconds(timeout));
     const fraction = (done + (done < total ? partial : 0)) / total;
     const eta = (total - done) * (done ? elapsed / done : attemptSeconds(timeout));
     const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame++ % 10];
@@ -640,8 +642,9 @@ async function scan(countries, protocols, timeout, tty) {
       "",
       stop
         ? yellow(" stopping after the current attempt…")
+        : waiting ? yellow(" paused · VPN disconnected · press p to resume")
         : ` ${cyan(spinner)} ${bold(current)}`,
-      stop ? "" : `   ${dim(step)} ${dim("·")} ${duration(now() - attemptStart)}`,
+      stop || waiting ? "" : `   ${dim(step)} ${dim("·")} ${duration(now() - attemptStart)}${paused ? yellow(" · pausing after this attempt") : ""}`,
       null,
       centerIn(stats, inner),
     ], {
@@ -658,7 +661,7 @@ async function scan(countries, protocols, timeout, tty) {
       while (vw(txt) > width && failed.length) txt = txt.slice(0, -8) + "…"; // ponytail: crude trim, fine for a status line
       lines.push("", centerIn(txt, width));
     }
-    lines.push("", centerIn(dim(`tab ${view === "ranking" ? "availability" : "ranking"} view · q stop · q twice force quit`), width), "", centerIn(dim(repoLink), width));
+    lines.push("", centerIn(dim(`tab ${view === "ranking" ? "availability" : "ranking"} view · p ${paused ? "resume" : "pause"} · q stop · q twice force quit`), width), "", centerIn(dim(repoLink), width));
     draw(lines);
   };
 
@@ -669,12 +672,17 @@ async function scan(countries, protocols, timeout, tty) {
       if (key.name === "tab") {
         view = view === "ranking" ? "availability" : "ranking";
         render();
+      } else if (key.name === "p" || key.name === "space") {
+        paused = !paused;
+        if (!paused) resume();
+        render();
       } else if (key.name === "q" || key.name === "escape" || (key.ctrl && key.name === "c")) {
         if (stop++) { // second press: bail out now
           leaveScreen();
           console.error(`stopped. the VPN may still be connecting: run '${CLI} disconnect'`);
           process.exit(130);
         }
+        resume(); // a paused scan stops right away
         render();
       }
     });
@@ -686,6 +694,11 @@ async function scan(countries, protocols, timeout, tty) {
 
   outer: for (const loc of countries) {
     for (const proto of protocols) {
+      if (paused && !stop) {
+        waiting = true, waitStart = now();
+        await new Promise((r) => (resume = r));
+        waiting = false, idle += now() - waitStart;
+      }
       if (stop) break outer;
       current = `${flag(loc)} ${countryName(loc)} ${dim("·")} ${proto}`;
       attemptStart = now();
