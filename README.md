@@ -75,7 +75,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 |---|---|---|
 | `-c, --countries` | comma-separated ISO country codes, city names or nicknames | open the picker |
 | `-p, --protocols` | comma-separated: `wireguard`, `ikev2` (macOS and Windows), `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all |
-| `-t, --timeout` | seconds to wait for each connection, at least 10 | picker: saved, or 10; with `-c`: 10 |
+| `-t, --timeout` | seconds to wait for each connection, at least 10 | picker: saved, or 15; with `-c`: 15 |
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |

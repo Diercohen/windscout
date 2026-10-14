@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
-export const DEFAULT_TIMEOUT = 10;
+export const DEFAULT_TIMEOUT = 15;
 export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that would have worked
 
 export const CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "windscout", "config.json");
