@@ -1,5 +1,13 @@
 // Latency and download speed over whatever connection is up (the VPN tunnel, during a scan).
+import { setDefaultResultOrder } from "node:dns";
+import { setDefaultAutoSelectFamily } from "node:net";
 import { now } from "./time.js";
+
+// a slow tunnel can take over a second to open a TCP connection, but Node's happy eyeballs gives each address 250 ms,
+// fails fast on IPv6 (no route on Linux), and fetch ends in ETIMEDOUT though the VPN works.
+// Connect to one IPv4 address instead, with the whole timeout
+setDefaultAutoSelectFamily(false);
+setDefaultResultOrder("ipv4first");
 
 const LATENCY_URL = "https://www.gstatic.com/generate_204";
 const SPEED_URL = "https://speed.cloudflare.com/__down?bytes=10000000";
