@@ -14,7 +14,7 @@ import { command, report, target } from "./tui/report.js";
 import { leaveScreen, out } from "./tui/terminal.js";
 import { cyan, green, yellow } from "./tui/text.js";
 import { now, sleep } from "./time.js";
-import { checkUpdate, UPDATE_COMMAND, updateNotice, VERSION, viaNpx } from "./update.js";
+import { canUpdate, checkUpdate, runUpdate, updateNotice, versionLines } from "./update.js";
 import { blockInternet, CLI, connectState, isFirewallOn, PROTOCOLS, restoreFirewall, waitForLogin, windscribe } from "./windscribe.js";
 
 const HELP = `Usage: windscout [options]
@@ -65,6 +65,18 @@ async function offerConnect(choices: Result[], timeout: number): Promise<void> {
   }
 }
 
+/** u in the picker: update, then run the new version in this one's place, with the same arguments */
+function updateAndRestart(): void {
+  const status = runUpdate();
+  if (status) {
+    console.error(yellow(`update failed (exit ${status})`));
+    process.exitCode = status;
+    return;
+  }
+  console.log(green("updated · restarting windscout"));
+  process.exitCode = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], { stdio: "inherit" }).status ?? 1;
+}
+
 async function main(): Promise<void> {
   const { values: a } = parseArgs({
     options: {
@@ -81,17 +93,9 @@ async function main(): Promise<void> {
   if (a.help) return console.log(HELP);
   checkUpdate(); // runs while the app starts and the user picks, before the VPN starts switching
   if (a.version) {
-    console.log(`windscout ${VERSION}`);
     await checkUpdate();
-    const notice = updateNotice();
-    if (!notice) return;
-    console.error(yellow(notice));
-    if (process.stdin.isTTY && out.isTTY && !viaNpx() && /^y(es)?$/i.test(await ask("update now? (y/n) "))) {
-      console.log(cyan(UPDATE_COMMAND));
-      // shell: npm is npm.cmd on Windows
-      const { status } = spawnSync(UPDATE_COMMAND, { shell: true, stdio: "inherit" });
-      if (status) process.exitCode = status;
-    }
+    console.log(versionLines().join("\n"));
+    if (canUpdate() && process.stdin.isTTY && out.isTTY && /^y(es)?$/i.test(await ask("update now? (y/n) "))) process.exitCode = runUpdate();
     return;
   }
   let timeout = a.timeout ? Number(a.timeout) : undefined;
@@ -114,6 +118,7 @@ async function main(): Promise<void> {
       firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
     });
     if (!choice) return;
+    if (choice === "update") return updateAndRestart();
     countries = choice.countries;
     protocols ??= choice.protocols;
     speedTest = choice.speed;
@@ -132,8 +137,7 @@ async function main(): Promise<void> {
   if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
   const choices = report(scan.results, protocols, { all: a.all, speedTest });
   await checkUpdate();
-  const notice = updateNotice();
-  if (notice) console.error("\n" + yellow(notice));
+  if (updateNotice()) console.error("\n" + versionLines().join("\n"));
   if (tty && choices.length) await offerConnect(choices, timeout);
 }
 

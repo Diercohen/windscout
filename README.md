@@ -20,7 +20,7 @@ WindScout drives the official `windscribe-cli`: it connects to each country × p
 npm install -g windscout   # or run once with: npx windscout
 ```
 
-On startup, WindScout checks npm for a newer version. If there is one, it shows the command to update, both in the picker and after the final report.
+On startup, WindScout checks npm for a newer version. Above the repository link at the bottom of the screen, it shows the installed version in grey (`windscout 0.5.6 · latest` once npm confirms nothing newer is out), or, when a newer one is out, an update notice in yellow. In the picker, press `u` to update and restart on the new version. The update runs `npm install -g windscout@latest`, with `sudo` when your global npm folder belongs to root (sudo then asks for your password). The update command is also printed after the final report.
 
 ## Usage
 
@@ -52,6 +52,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `1`–`6` | toggle a protocol (`1`–`5` on Linux, which has no IKEv2) |
 | `s` | toggle the speed test (off = connect-only mode) |
 | `f` | toggle "block internet while scanning" (firewall) |
+| `u` | update to the newer version and restart (only when the picker shows one is out) |
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
 
@@ -79,7 +80,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
-| `-v, --version` | print the installed version; if a newer one is on npm, show the update command and ask (y/n) to run it | |
+| `-v, --version` | print the installed version; if a newer one is on npm, show the update command (with `sudo` when needed) and ask (y/n) to run it | |
 
 ## Connect-only mode
 

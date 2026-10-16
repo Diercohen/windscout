@@ -3,6 +3,7 @@ import type { Key } from "node:readline";
 import { sortOk } from "../probe.js";
 import { attemptSeconds, type Scan, type ScanHooks } from "../scan.js";
 import { duration, now } from "../time.js";
+import { versionLines } from "../update.js";
 import { CLI, restoreFirewall } from "../windscribe.js";
 import { countryName, flag } from "./country.js";
 import { matrix, resultTable } from "./tables.js";
@@ -44,7 +45,8 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
     ].join(dim("   │   "));
     const minW = Math.max(64, vw(stats) + 6); // panel and table share one width
     // results table gets whatever height the status panel and footer leave
-    const room = Math.max(1, rows - 22);
+    const version = versionLines();
+    const room = Math.max(1, rows - 22 - version.length);
     const table = view === "availability"
       ? matrix(results, protocols, { minWidth: minW, limit: room })
       : ok.length
@@ -82,7 +84,8 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
       while (vw(txt) > width && failed.length) txt = txt.slice(0, -8) + "…"; // ponytail: crude trim, fine for a status line
       lines.push("", centerIn(txt, width));
     }
-    lines.push("", centerIn(dim(`tab ${view === "ranking" ? "availability" : "ranking"} view · p ${paused ? "resume" : "pause"} · q stop · q twice force quit`), width), "", centerIn(dim(repoLink), width));
+    lines.push("", centerIn(dim(`tab ${view === "ranking" ? "availability" : "ranking"} view · p ${paused ? "resume" : "pause"} · q stop · q twice force quit`), width), "",
+      ...version.map((l) => centerIn(l, width)), centerIn(dim(repoLink), width));
     draw(lines);
   };
 

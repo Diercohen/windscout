@@ -3,7 +3,7 @@ import type { Key } from "node:readline";
 import { MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
 import { attemptSeconds, estimate } from "../scan.js";
 import { duration } from "../time.js";
-import { checkUpdate, updateNotice } from "../update.js";
+import { canUpdate, checkUpdate, versionLines } from "../update.js";
 import { COUNTRIES, PROTOCOLS } from "../windscribe.js";
 import { countryName, flag } from "./country.js";
 import { draw, enterScreen, input, leaveScreen, out, repoLink, type Mouse } from "./terminal.js";
@@ -34,8 +34,8 @@ interface Hits {
 
 const flip = <T>(set: Set<T>, value: T) => (set.has(value) ? set.delete(value) : set.add(value));
 
-/** Resolves to the choice (also saved for next time), or null when the user quits */
-export function pick(saved: Choice | null, { timeout, speedTest, firewall }: PickerOptions): Promise<Choice | null> {
+/** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
+export function pick(saved: Choice | null, { timeout, speedTest, firewall }: PickerOptions): Promise<Choice | null | "update"> {
   const selected = new Set(saved?.countries ?? []);
   const protos = new Set(saved?.protocols.length ? saved.protocols : PROTOCOLS);
   let cursor = 0, top = 0, message = "", query = "", searching = false;
@@ -50,9 +50,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
   return new Promise((resolve) => {
     const render = () => {
       const rows = out.rows || 24;
-      const notice = updateNotice();
+      const version = versionLines(true);
       const matches = visible();
-      const height = Math.max(3, rows - 21 - (notice ? 1 : 0));
+      const height = Math.max(3, rows - 21 - version.length);
       cursor = Math.max(0, Math.min(cursor, matches.length - 1));
       if (cursor < top) top = cursor;
       if (cursor >= top + height) top = cursor - height + 1;
@@ -116,8 +116,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · t timeout · enter start · ${query ? "esc clear · " : ""}q quit`), width),
       ];
       if (message) lines.push(centerIn(yellow(message), width));
-      lines.push("", centerIn(dim(repoLink), width));
-      if (notice) lines.push(centerIn(yellow(notice), width));
+      lines.push("", ...version.map((l) => centerIn(l, width)), centerIn(dim(repoLink), width));
       const at = draw(lines);
 
       // click map, in screen coordinates
@@ -144,13 +143,13 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
     };
 
     let closed = false;
-    checkUpdate().then(() => updateNotice() && !closed && render()); // the check usually lands after the first draw
-    const finish = (value: Choice | null) => {
+    checkUpdate().then(() => !closed && render()); // the check usually lands after the first draw
+    const finish = (value: Choice | null | "update") => {
       closed = true;
       out.off("resize", render);
       input.removeAllListeners("keypress");
       input.removeAllListeners("mouse");
-      if (!value) leaveScreen();
+      if (!value || value === "update") leaveScreen();
       resolve(value);
     };
 
@@ -246,6 +245,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       else if (k === "s") speedTest = !speedTest;
       else if (k === "f") firewall = !firewall;
       else if (k === "t") editing = true, seconds = "";
+      else if (k === "u" && canUpdate()) return finish("update");
       else if (/^[1-9]$/.test(str ?? "") && PROTOCOLS[Number(str) - 1]) flip(protos, PROTOCOLS[Number(str) - 1]);
       else if (k === "escape" && query) query = "", cursor = 0;
       else if (k === "return") {

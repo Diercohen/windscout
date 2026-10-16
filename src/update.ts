@@ -1,8 +1,11 @@
-// The installed version, and whether npm has a newer one.
-import { readFileSync } from "node:fs";
+// The installed version, whether npm has a newer one, and updating to it.
+import { spawnSync } from "node:child_process";
+import { accessSync, constants, readFileSync } from "node:fs";
+import { cyan, dim, under, yellow } from "./tui/text.js";
 
 export const VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 let latest: string | null = null; // newer version on npm, once known
+let upToDate = false; // npm answered, and has nothing newer
 let check: Promise<void> | undefined;
 
 // numeric x.y.z compare; parseInt drops a prerelease suffix ("0-beta" → 0)
@@ -16,17 +19,51 @@ export function newer(a: string, b: string): boolean {
 export function checkUpdate(): Promise<void> {
   check ??= fetch("https://registry.npmjs.org/windscout/latest", { signal: AbortSignal.timeout(3000) })
     .then((r) => r.json() as Promise<{ version?: string }>)
-    .then(({ version }) => { if (version && newer(version, VERSION)) latest = version; })
+    .then(({ version }) => {
+      if (version && newer(version, VERSION)) latest = version;
+      else upToDate = Boolean(version);
+    })
     .catch(() => {});
   return check;
 }
 
 // run through npx: there's nothing installed to update, the next npx windscout@latest fetches it
 export const viaNpx = () => process.env.npm_command === "exec";
-export const UPDATE_COMMAND = "npm install -g windscout@latest";
+// npm replaces the folder this package sits in; a root-owned global folder (system Node) needs sudo for that
+const sudo = (() => {
+  try {
+    accessSync(new URL("../..", import.meta.url), constants.W_OK);
+    return false;
+  } catch {
+    return true;
+  }
+})();
+const INSTALL = "npm install -g windscout@latest";
+export const UPDATE_COMMAND = (sudo ? "sudo " : "") + INSTALL;
+// npm is Node too: through a slow tunnel its downloads time out like fetch did (see measure.ts) without these
+const NODE_FIX = "--no-network-family-autoselection --dns-result-order=ipv4first";
 
-/** "update available: …" with the command to run, once checkUpdate() found a newer version */
-export function updateNotice(): string | null {
-  if (!latest) return null;
-  return `update available: ${VERSION} → ${latest} · run: ${viaNpx() ? "npx windscout@latest" : UPDATE_COMMAND}`;
+/** A newer version is out, and npm can install it (under npx there's nothing installed to update) */
+export const canUpdate = () => latest !== null && !viaNpx();
+
+/** Runs the update in this terminal (sudo asks for the password here); returns npm's exit status */
+export function runUpdate(): number {
+  console.log(cyan(UPDATE_COMMAND));
+  const NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} ${NODE_FIX}`.trim();
+  // sudo clears the environment, so env sets NODE_OPTIONS on its side; shell: npm is npm.cmd on Windows
+  return spawnSync(sudo ? `sudo env NODE_OPTIONS="${NODE_FIX}" ${INSTALL}` : INSTALL,
+    { shell: true, stdio: "inherit", env: { ...process.env, NODE_OPTIONS } }).status ?? 1;
 }
+
+/** "update available: …" and how to get it, once checkUpdate() found a newer version; onKey: this screen updates on u */
+export function updateNotice(onKey = false): string[] | null {
+  if (!latest) return null;
+  return [`update available: ${VERSION} → ${latest}`,
+    viaNpx() ? "quit, then run: npx windscout@latest"
+    : onKey ? `press ${under("u")} to update and restart · runs ${UPDATE_COMMAND}`
+    : `run: ${UPDATE_COMMAND}, then restart windscout`];
+}
+
+/** The version line(s) above the repo link: the update notice in yellow, or the installed version in grey */
+export const versionLines = (onKey = false) =>
+  updateNotice(onKey)?.map(yellow) ?? [dim(`windscout ${VERSION}${upToDate ? " · latest" : ""}`)];
