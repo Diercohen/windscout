@@ -34,7 +34,7 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
     const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame++ % 10];
     const ok = sortOk(results);
     const failed = finished.filter((c) => !results.some((r) => r.query === c && r.status === "ok"));
-    const current = scan.current ? `${flag(scan.current.country)} ${countryName(scan.current.country)} ${dim("·")} ${scan.current.protocol}` : "";
+    const current = scan.current ? `${flag(scan.current.country)} ${countryName(scan.current.country)}${scan.current.location ? ` · ${scan.current.location}` : ""} ${dim("·")} ${scan.current.protocol}` : "";
 
     const pct = bold(`${String(Math.floor(fraction * 100)).padStart(3)}%`);
     const stats = [
@@ -78,7 +78,7 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
 
     const lines = [...panel];
     if (table.length) lines.push(...table);
-    else lines.push("", centerIn(dim(finished.length ? "nothing has connected yet" : "results appear here after each country"), width));
+    else lines.push("", centerIn(dim(finished.length ? "nothing has connected yet" : "results appear here after each location"), width));
     if (failed.length) {
       let txt = `${red("✗")} ${dim("no connection:")} ${failed.map((c) => `${flag(c)} ${c}`).join(" ")}`;
       while (vw(txt) > width && failed.length) txt = txt.slice(0, -8) + "…"; // ponytail: crude trim, fine for a status line
@@ -129,7 +129,7 @@ export function logProgress(scan: Scan): ScanView {
     scan.stop();
   });
   return {
-    attempt: (country, protocol) => process.stdout.write(`[${scan.done + 1}/${scan.total}] ${country} ${protocol} ... `),
+    attempt: (country, protocol, location) => process.stdout.write(`[${scan.done + 1}/${scan.total}] ${country}${location ? ` · ${location}` : ""} ${protocol} ... `),
     result: (r) => console.log([r.status, r.location, r.speedMbps ? `${r.speedMbps.toFixed(1)} Mbps` : ""].join(" ").trim()),
     close() {},
   };

@@ -2,7 +2,7 @@
 
 Find which Windscribe locations and protocols actually work from your network, ranked by speed. Runs on Linux, macOS and Windows.
 
-WindScout drives the official `windscribe-cli`: it connects to each country × protocol pair, measures latency and download speed through the tunnel, disconnects, and prints a ranked table.
+WindScout drives the official `windscribe-cli`: it expands each selected country into named datacenters, connects to each datacenter × protocol pair, measures latency and download speed through the tunnel, disconnects, and prints a ranked table.
 
 ![WindScout picking countries, scanning, and printing the availability grid and ranked results](demo.gif)
 
@@ -60,7 +60,11 @@ Run `windscout` with no arguments to open the interactive picker:
 
 Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
-While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command; type a number at the prompt to connect to it.
+Selecting a country scans every named datacenter in its location catalog. For example, selecting **US** tests locations such as **New York - Empire**, **Los Angeles - Lamar** and **Salt Lake City - Missionary** separately, over each selected protocol. The picker shows location counts beside countries, and its attempt count and time estimate include all those locations.
+
+Use `-l 5` (or `--limit 5`) to test at most five distinct locations **per country**. The limit follows catalog order, and every selected protocol is still tried at each chosen location. Countries with fewer locations are scanned once each without repeats. Omitting `-l` tests all catalog locations. The limit also applies to known nicknames in `-c`; a city or unknown nickname keeps the CLI's direct lookup behavior. The limit is per run and is not saved in the picker settings.
+
+While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes as each datacenter is tested. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command; type a number at the prompt to connect to it.
 
 ### Non-interactive
 
@@ -68,15 +72,20 @@ Pass `-c` to skip the picker, for scripts or when there is no terminal:
 
 ```sh
 windscout -c DE,NL,TR -p stealth,tcp:443    # chosen countries and protocols (port optional)
+windscout -c US -p wireguard -n             # all US datacenters, connect-only
+windscout -c US,DE -l 5 -p wireguard -n      # at most 5 locations per country (up to 10 attempts)
+windscout -l 5                              # picker with capped counts and estimates
 windscout -c Frankfurt,Wurstchen            # cities or datacenter nicknames work too
+windscout -c Empire,Lamar,Missionary -n      # only these specific datacenters
 windscout -t 40 -a                          # longer connect timeout, also list failed attempts
 ```
 
 | Option | Meaning | Default |
 |---|---|---|
-| `-c, --countries` | comma-separated ISO country codes, city names or nicknames | open the picker |
+| `-c, --countries` | comma-separated ISO country codes (all catalog datacenters), city names or specific nicknames | open the picker |
 | `-p, --protocols` | comma-separated: `wireguard`, `ikev2` (macOS and Windows), `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all |
 | `-t, --timeout` | seconds to wait for each connection, at least 10 | picker: saved, or 15; with `-c`: 15 |
+| `-l, --limit` | maximum distinct locations per country; positive whole number | all locations |
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
@@ -86,7 +95,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 
 Often you only need to know **what connects**, not how fast it is. Turn the speed test off with `s` in the picker or with `--no-speed`. Each working connection is then checked with a quick latency test only. That saves about 15 s per working connection, and results are ranked by latency. Connect-only is the default on the first run, and the choice is remembered.
 
-Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet). Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
+Both modes show an **availability grid** grouped by country, with a separate row per datacenter and ✓ / ✗ for each protocol (`·` = not tried yet). A failure at one datacenter does not mark the others as failed:
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -95,7 +104,7 @@ Both modes show an **availability grid**: one row per country, and ✓ / ✗ for
 │ Country                 │ Location(s)            │ stealth │ wireguard │ tcp │
 ├─────────────────────────┼────────────────────────┼─────────┼───────────┼─────┤
 │ 🇩🇪 Germany              │ Frankfurt - Castle     │    ✓    │     ✓     │  ✓  │
-│                         │ Frankfurt - Wurst      │         │           │     │
+│                         │ Frankfurt - Wurst      │    ✗    │     ✓     │  ✗  │
 │ 🇳🇱 Netherlands          │ Amsterdam - Tulip      │    ✓    │     ✓     │  ·  │
 │ 🇦🇪 United Arab Emirates │ Dubai                  │    ✗    │     ✗     │  ✗  │
 ╰─────────────────────────┴────────────────────────┴─────────┴───────────┴─────╯
@@ -138,9 +147,10 @@ At the end, the results, a per-protocol summary and the best pick are printed to
 
 ## Notes
 
-- **Connecting by country picks a random datacenter.** A single run tests one per country and protocol, so different protocols may land on different datacenters. Pass city names or nicknames with `-c` to test specific datacenters.
+- **Countries expand into individual datacenters.** WindScout uses each datacenter's nickname so a country scan tests multiple distinct locations, rather than asking Windscribe to choose one. City names and nicknames passed with `-c` retain their direct CLI lookup behavior; use nicknames to pin individual datacenters. Duplicate nickname targets are scanned once.
+- **Location discovery works offline.** Before scanning, WindScout tries Windscribe's [public location catalog](https://assets.windscribe.com/serverlist/mob-v2/1/0), with a four-second timeout. If it is unreachable or invalid, it uses the bundled snapshot of 200 datacenters across 72 countries (52 US locations), retrieved on 2026-10-18 from a [mirror of that catalog](https://github.com/tn3w/Windscribe-IPs). A country absent from the catalog falls back to the original country lookup. The list can include Pro locations; your Windscribe account determines which ones can connect.
 - **The country list is built in.** On v2.24, `windscribe-cli locations` returns nothing, so WindScout uses a fixed list of country codes. Codes Windscribe doesn't serve are skipped quickly.
-- **A full scan takes a while.** The worst case is countries × protocols × timeout. Narrow it with `-c` and `-p`.
+- **A full scan takes a while.** The worst case is datacenters × protocols × timeout. Narrow it with specific nicknames in `-c` and fewer protocols in `-p`.
 - **No flags in macOS Terminal.** Terminal.app draws flag emoji wider than their space, which pushes table borders out of line, so WindScout leaves them out there (as on Windows). iTerm2 and other terminals show them.
 - **Your connection changes during the scan.** WindScout connects and disconnects the VPN repeatedly, so don't run it while you need a stable connection.
 
@@ -151,9 +161,12 @@ The source is TypeScript in `src/`. It compiles to `dist/`, which is what gets p
 ```sh
 npm install
 npm run build       # compile src/ to dist/ (the windscout command is dist/cli.js)
+npm test            # build and run regression tests (Node.js 22.3+ for module mocking)
 node dist/cli.js    # run your build; takes the same options as windscout
 ./publish.sh        # build, install the packed tarball to check it runs, publish to npm (bump the version first)
 ```
+
+To run a local build, use `node dist/cli.js -c US -l 5 -p wireguard -n` after building. The published `npx windscout` package and the picker's npm update action install the npm release, which may not include local changes.
 
 ## License
 

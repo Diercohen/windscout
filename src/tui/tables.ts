@@ -12,7 +12,7 @@ const SPEED_COL = 6;
 
 const resultRow = (r: Result, i: number) => [
   dim(String(i + 1)),
-  `${flag(r.query)} ${countryName(r.query)}`,
+  `${flag(r.country ?? r.query)} ${countryName(r.country ?? r.query)}`,
   r.location || "-",
   r.protocol,
   r.connectS === null ? "-" : `${fmt(r.connectS, 1)} s`,
@@ -32,29 +32,25 @@ export function matrix(results: Result[], protocols: readonly string[], { minWid
   const byCountry = new Map<string, Result[]>();
   for (const r of results) {
     if (r.status === "no such location" || r.status === "interrupted") continue;
-    if (!byCountry.has(r.query)) byCountry.set(r.query, []);
-    byCountry.get(r.query)!.push(r);
+    const country = r.country ?? r.query;
+    if (!byCountry.has(country)) byCountry.set(country, []);
+    byCountry.get(country)!.push(r);
   }
   if (!byCountry.size) return [];
   const ranked = [...byCountry].map(([q, rs]) => ({ q, rs, good: rs.filter((r) => r.status === "ok").length }))
     .sort((a, b) => b.good - a.good); // stable: ties keep scan order
   const reachable = ranked.filter((c) => c.good).length;
   const rows = ranked.slice(0, limit).flatMap(({ q, rs }) => {
-    const seen = rs.find((r) => r.status === "ok") ?? rs.find((r) => r.location);
-    // protocols can land on different datacenters (even cities), so list each one that connected, one per line
-    const places = [...new Set(rs.filter((r) => r.status === "ok").map((r) => r.location).filter(Boolean))];
-    const [first = seen?.location.split(" - ")[0] || dim("-"), ...more] = places;
-    return [
-      [
-        `${flag(q)} ${countryName(q)}`,
-        first,
-        ...protocols.map((p) => {
-          const r = rs.find((x) => x.protocol === p);
-          return !r ? dim("·") : r.status === "ok" ? green("✓") : red("✗");
-        }),
-      ],
-      ...more.map((place) => ["", place, ...protocols.map(() => "")]),
-    ];
+    // Each datacenter gets its own protocol cells, so a failed server cannot hide a working one.
+    const places = [...new Set(rs.map((r) => r.location || r.query))];
+    return places.map((place, i) => [
+      i === 0 ? `${flag(q)} ${countryName(q)}` : "",
+      place,
+      ...protocols.map((p) => {
+        const attempts = rs.filter((r) => (r.location || r.query) === place && r.protocol === p);
+        return !attempts.length ? dim("·") : attempts.some((r) => r.status === "ok") ? green("✓") : red("✗");
+      }),
+    ]);
   }).slice(0, limit);
   return grid(
     [{ title: "Country" }, { title: "Location(s)" }, ...protocols.map((p): Column => ({ title: p, align: "center" }))],
