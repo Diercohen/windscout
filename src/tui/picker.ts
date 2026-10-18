@@ -1,6 +1,7 @@
 // Screen 1: pick countries, protocols, speed test, firewall and timeout, by keyboard or mouse.
 import type { Key } from "node:readline";
 import { MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
+import { expandLocations, LOCATIONS, type Location } from "../locations.js";
 import { attemptSeconds, estimate } from "../scan.js";
 import { duration } from "../time.js";
 import { canUpdate, checkUpdate, versionLines } from "../update.js";
@@ -14,6 +15,8 @@ export interface PickerOptions {
   timeout: number; // initial state of the settings
   speedTest: boolean;
   firewall: boolean;
+  locations?: readonly Location[];
+  limit?: number;
 }
 
 type Button = "start" | "all" | "none" | "quit";
@@ -35,7 +38,7 @@ interface Hits {
 const flip = <T>(set: Set<T>, value: T) => (set.has(value) ? set.delete(value) : set.add(value));
 
 /** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
-export function pick(saved: Choice | null, { timeout, speedTest, firewall }: PickerOptions): Promise<Choice | null | "update"> {
+export function pick(saved: Choice | null, { timeout, speedTest, firewall, locations = LOCATIONS, limit }: PickerOptions): Promise<Choice | null | "update"> {
   const selected = new Set(saved?.countries ?? []);
   const protos = new Set(saved?.protocols.length ? saved.protocols : PROTOCOLS);
   let cursor = 0, top = 0, message = "", query = "", searching = false;
@@ -78,7 +81,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       const body = shown.map((code, j) => {
         const here = top + j === cursor;
         const mark = selected.has(code) ? green("●") : dim("○");
-        const name = `${flag(code)} ${countryName(code)}`;
+        const available = expandLocations([code], locations).length;
+        const count = expandLocations([code], locations, limit).length;
+        const name = `${flag(code)} ${countryName(code)} (${count < available ? `${count}/${available}` : count} location${available === 1 ? "" : "s"})`;
         return [`${here ? cyan("❯") : " "} ${mark}`, here ? bold(code) : dim(code), here ? bold(cyan(name)) : name];
       });
       if (!body.length) body.push(["   ", "", dim("no country matches")]);
@@ -98,7 +103,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         right: `${bold(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
       });
-      const n = selected.size * protos.size;
+      const count = expandLocations([...selected], locations, limit).length;
+      const n = count * protos.size;
       const lines = [
         ...head,
         ...table,
@@ -106,7 +112,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         centerIn(buttonLine, width),
         "",
         centerIn(n
-          ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(estimate(selected.size, protos.size, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each)`)}`
+          ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(estimate(count, protos.size, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each)`)}`
           : yellow("select at least one country and one protocol"), width),
         centerIn(dim(editing
           ? "type the seconds to wait for each connection · enter/esc done"

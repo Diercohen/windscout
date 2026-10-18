@@ -28,7 +28,7 @@ export function report(results: Result[], protocols: readonly string[], { all, s
       : [],
     others: others.length
       ? grid([{ title: "#", align: "right" }, { title: "Location" }, { title: "Protocol" }, { title: "Latency", align: "right" }, { title: "Connect with" }],
-        others.map((r, i) => [dim(String(i + 1)), `${flag(r.query)} ${r.location}`, r.protocol,
+        others.map((r, i) => [dim(String(i + 1)), `${flag(r.country ?? r.query)} ${r.location}`, r.protocol,
           r.latencyMs === null ? "-" : `${fmt(r.latencyMs, 0)} ms`, cyan(command(r))]),
         { caption: bold("Other working locations"), captionRight: dim("by latency"), minWidth })
       : [],
@@ -55,13 +55,13 @@ export function report(results: Result[], protocols: readonly string[], { all, s
   const bestValue = (r: Result) => (speedTest ? `${fmt(r.speedMbps, 1)} Mbps` : `${fmt(r.latencyMs, 0)} ms`);
   console.log(grid(
     [{ title: "Protocol" }, { title: "Worked", align: "right" }, { title: speedTest ? "Best speed" : "Best latency", align: "right" }, { title: "Best location" }],
-    stats.map((s) => [s.p, `${s.good}/${s.tried}`, s.best ? bestValue(s.best) : "-", s.best ? `${flag(s.best.query)} ${s.best.location}` : "-"]),
+    stats.map((s) => [s.p, `${s.good}/${s.tried}`, s.best ? bestValue(s.best) : "-", s.best ? `${flag(s.best.country ?? s.best.query)} ${s.best.location}` : "-"]),
     { caption: bold("Per protocol"), minWidth: width },
   ).join("\n"));
   const b = ok[0];
   const facts = [speedTest && `${fmt(b.speedMbps, 1)} Mbps`, `${fmt(b.latencyMs, 0)} ms`].filter(Boolean).join(" · ");
   console.log(box([
-    `${flag(b.query)} ${bold(b.location)} over ${bold(b.protocol)} ${dim("· " + facts)}`,
+    `${flag(b.country ?? b.query)} ${bold(b.location)} over ${bold(b.protocol)} ${dim("· " + facts)}`,
     cyan(command(b)),
   ], { title: green(speedTest ? "★ Best" : "★ Best (lowest latency)"), width: width - 4 }).join("\n"));
   if (rest.length) console.log(rest.join("\n"));

@@ -7,6 +7,7 @@ export type Status = "ok" | "timeout" | "failed" | "no such location" | "no inte
 
 export interface Result {
   query: string; // what was asked for: a country code, city or nickname
+  country?: string; // parent country when a selection expands into datacenters
   protocol: string; // as passed to the CLI, optionally with a port: "tcp:443"
   location: string; // where the app connected: "Frankfurt - Castle"
   connectS: number | null; // seconds until connected

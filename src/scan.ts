@@ -1,31 +1,35 @@
-// A scan: every country × protocol pair, tried in order, with pause and stop.
+// A scan: every selected datacenter × protocol pair, tried in order, with pause and stop.
+import { expandLocations, type Location, type ScanTarget } from "./locations.js";
 import { probe, type Result } from "./probe.js";
 import { now } from "./time.js";
 
 // ponytail: rough per-attempt cost: a failure burns the timeout, a success ~connect+speed test; refine from real runs
 export const attemptSeconds = (timeout: number) => timeout + 5;
-export const estimate = (countries: number, protocols: number, timeout: number) => countries * protocols * attemptSeconds(timeout);
+export const estimate = (locations: number, protocols: number, timeout: number) => locations * protocols * attemptSeconds(timeout);
 
 export interface ScanOptions {
   timeout: number; // seconds to wait for each connection
   speedTest: boolean; // false = connect-only: skip the download test, rank by latency
+  locations?: readonly Location[];
+  limit?: number; // maximum distinct datacenters per country; omitted = all
 }
 
 /** Called around each attempt, e.g. to print a progress line */
 export interface ScanHooks {
-  attempt?(country: string, protocol: string): void;
+  attempt?(country: string, protocol: string, location: string): void;
   result?(r: Result): void;
 }
 
 /** Progress views read the fields; their keys call togglePause() and stop() */
 export class Scan {
   readonly results: Result[] = [];
-  readonly finished: string[] = []; // countries with every attempt done: the views refresh their tables per country
+  readonly finished: string[] = []; // location queries with every protocol done
   readonly total: number;
+  readonly targets: readonly ScanTarget[];
   readonly started = now();
   done = 0;
   attemptStart = now();
-  current: { country: string; protocol: string } | null = null;
+  current: { country: string; protocol: string; location: string } | null = null;
   step = ""; // what the running attempt is doing
   stopping = false; // stop after the current attempt
   // a pause lands between attempts, so the VPN is disconnected while waiting
@@ -36,7 +40,8 @@ export class Scan {
   private resume = () => {};
 
   constructor(readonly countries: readonly string[], readonly protocols: readonly string[], readonly options: ScanOptions) {
-    this.total = countries.length * protocols.length;
+    this.targets = expandLocations(countries, options.locations, options.limit);
+    this.total = this.targets.length * protocols.length;
   }
 
   /** Seconds spent scanning, pauses not counted */
@@ -56,7 +61,7 @@ export class Scan {
 
   async run(hooks: ScanHooks = {}): Promise<Result[]> {
     const { timeout, speedTest } = this.options;
-    outer: for (const country of this.countries) {
+    outer: for (const { country, query, location } of this.targets) {
       for (const protocol of this.protocols) {
         if (this.paused && !this.stopping) {
           this.waiting = true;
@@ -66,10 +71,12 @@ export class Scan {
           this.idle += now() - this.waitStart;
         }
         if (this.stopping) break outer;
-        this.current = { country, protocol };
+        this.current = { country, protocol, location };
         this.attemptStart = now();
-        hooks.attempt?.(country, protocol);
-        const r = await probe(country, protocol, { timeout, speedTest, stopped: () => this.stopping, onStep: (s) => (this.step = s) });
+        hooks.attempt?.(country, protocol, location);
+        const r = await probe(query, protocol, { timeout, speedTest, stopped: () => this.stopping, onStep: (s) => (this.step = s) });
+        r.country = country;
+        r.location ||= location;
         this.results.push(r);
         this.done++;
         hooks.result?.(r);
@@ -78,7 +85,7 @@ export class Scan {
           break;
         }
       }
-      this.finished.push(country);
+      this.finished.push(query);
     }
     return this.results;
   }

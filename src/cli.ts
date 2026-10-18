@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // WindScout: find which Windscribe locations and protocols actually work from here.
-// Drives the official windscribe-cli: connects to each country/protocol pair,
+// Drives the official windscribe-cli: connects to each datacenter/protocol pair,
 // measures latency and download speed through the tunnel, prints a ranked table.
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { CONFIG, DEFAULT_TIMEOUT, loadConfig, MIN_TIMEOUT } from "./config.js";
 import type { Result } from "./probe.js";
+import { loadLocations } from "./locations.js";
 import { Scan } from "./scan.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
@@ -21,11 +22,13 @@ const HELP = `Usage: windscout [options]
 
 Find which Windscribe locations and protocols work from your network, ranked by speed.
 Without -c it opens an interactive country picker (your selection is remembered).
+Each selected country tests all named datacenters unless capped with -l.
 
 Options:
   -c, --countries LIST  comma-separated ISO codes, city names or nicknames (skips the picker)
   -p, --protocols LIST  comma-separated protocols, optional :port (default: ${PROTOCOLS.join(",")})
   -t, --timeout SEC     seconds to wait for each connection, at least ${MIN_TIMEOUT} (default: saved, or ${DEFAULT_TIMEOUT})
+  -l, --limit COUNT     maximum locations per country, a positive whole number (default: all)
   -a, --all             also show failed attempts in the final table
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
   -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
@@ -83,6 +86,7 @@ async function main(): Promise<void> {
       countries: { type: "string", short: "c" },
       protocols: { type: "string", short: "p" },
       timeout: { type: "string", short: "t" },
+      limit: { type: "string", short: "l" },
       all: { type: "boolean", short: "a", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -100,8 +104,12 @@ async function main(): Promise<void> {
   }
   let timeout = a.timeout ? Number(a.timeout) : undefined;
   if (timeout !== undefined && !(timeout >= MIN_TIMEOUT)) throw new Error(`--timeout must be at least ${MIN_TIMEOUT} seconds`);
+  const limit = a.limit === undefined ? undefined : Number(a.limit);
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))
+    throw new Error("--limit must be a positive whole number");
 
   const status = await waitForLogin();
+  const locations = await loadLocations();
   const tty = Boolean(process.stdin.isTTY && out.isTTY);
   let countries = a.countries ? list(a.countries) : undefined;
   let protocols: readonly string[] | undefined = a.protocols ? list(a.protocols) : undefined;
@@ -112,6 +120,8 @@ async function main(): Promise<void> {
     const saved = loadConfig();
     if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
     const choice = await pick(saved, {
+      locations,
+      limit,
       timeout: timeout ?? saved?.timeout ?? DEFAULT_TIMEOUT,
       speedTest: speedTest && (saved?.speed ?? false), // first run: connect-only
       // already on in the app: show it on, since the scan won't turn it off
@@ -128,7 +138,7 @@ async function main(): Promise<void> {
   protocols ??= PROTOCOLS;
   timeout ??= DEFAULT_TIMEOUT;
 
-  const scan = new Scan(countries, protocols, { timeout, speedTest });
+  const scan = new Scan(countries, protocols, { timeout, speedTest, locations, limit });
   const blocking = firewall && (await blockInternet());
   const view = tty ? showProgress(scan, blocking) : logProgress(scan);
   await scan.run(view);
