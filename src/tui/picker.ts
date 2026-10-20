@@ -1,4 +1,4 @@
-// Screen 1: pick countries, protocols, speed test, firewall and timeout, by keyboard or mouse.
+// Screen 1: pick countries, protocols, speed test, firewall, random order and timeout, by keyboard or mouse.
 import type { Key } from "node:readline";
 import { MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
 import { attemptSeconds, estimate } from "../scan.js";
@@ -14,6 +14,7 @@ export interface PickerOptions {
   timeout: number; // initial state of the settings
   speedTest: boolean;
   firewall: boolean;
+  random: boolean;
 }
 
 type Button = "start" | "all" | "none" | "quit";
@@ -24,6 +25,7 @@ interface Hits {
   protoHits: [number, number][]; // [from, to) columns of each protocol
   speedRow: number;
   firewallRow: number;
+  randomRow: number;
   timeoutRow: number;
   searchRow: number;
   firstRow: number; // first country row
@@ -35,7 +37,7 @@ interface Hits {
 const flip = <T>(set: Set<T>, value: T) => (set.has(value) ? set.delete(value) : set.add(value));
 
 /** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
-export function pick(saved: Choice | null, { timeout, speedTest, firewall }: PickerOptions): Promise<Choice | null | "update"> {
+export function pick(saved: Choice | null, { timeout, speedTest, firewall, random }: PickerOptions): Promise<Choice | null | "update"> {
   const selected = new Set(saved?.countries ?? []);
   const protos = new Set(saved?.protocols.length ? saved.protocols : PROTOCOLS);
   let cursor = 0, top = 0, message = "", query = "", searching = false;
@@ -52,7 +54,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       const rows = out.rows || 24;
       const version = versionLines(true);
       const matches = visible();
-      const height = Math.max(3, rows - 21 - version.length);
+      const height = Math.max(3, rows - 22 - version.length);
       cursor = Math.max(0, Math.min(cursor, matches.length - 1));
       if (cursor < top) top = cursor;
       if (cursor >= top + height) top = cursor - height + 1;
@@ -67,6 +69,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       const fwLine = `${dim(under("f"))} ${firewall ? green("● " + fwLabel) : dim("○ " + fwLabel)}  ${dim(firewall
         ? "only VPN traffic gets through"
         : "off: apps may leak in between")}`;
+      const randomLine = `${dim(under("r"))} ${random ? green("● random order") : dim("○ random order")}  ${dim(random
+        ? "scans the countries shuffled, a new order each run"
+        : "off: scans in list order")}`;
       timeout = Number(seconds);
       const short = timeout < MIN_TIMEOUT;
       const timeoutLine = `${dim(under("t"))} timeout ${editing ? bold(seconds) + cyan("▏") : (short ? yellow : bold)(seconds || "?")} s  ${dim(`per connection · at least ${MIN_TIMEOUT}`)}`;
@@ -91,9 +96,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       const buttonLine = buttons.map(([id, label]) => (id === "start" ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
-        { caption: search, captionRight: dim(range), minWidth: Math.max(vw(protoLine), vw(speedLine), vw(fwLine), vw(timeoutLine)) + 4 });
+        { caption: search, captionRight: dim(range), minWidth: Math.max(vw(protoLine), vw(speedLine), vw(fwLine), vw(randomLine), vw(timeoutLine)) + 4 });
       const width = vw(table[0]);
-      const head = box([protoLine, speedLine, fwLine, timeoutLine], {
+      const head = box([protoLine, speedLine, fwLine, randomLine, timeoutLine], {
         title: bold(cyan("WindScout")),
         right: `${bold(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
@@ -113,7 +118,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
           : searching
           ? "type to filter · ↑↓ move · enter/esc done"
           : `↑↓ move · space select · a/n ${query ? "all/none shown" : "all/none"} · / search`), width),
-        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · t timeout · enter start · ${query ? "esc clear · " : ""}q quit`), width),
+        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · r random · t timeout · enter start · ${query ? "esc clear · " : ""}q quit`), width),
       ];
       if (message) lines.push(centerIn(yellow(message), width));
       lines.push("", ...version.map((l) => centerIn(l, width)), centerIn(dim(repoLink), width));
@@ -135,7 +140,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         return range;
       });
       hit = {
-        protoRow: at.top + 1, protoHits, speedRow: at.top + 2, firewallRow: at.top + 3, timeoutRow: at.top + 4,
+        protoRow: at.top + 1, protoHits, speedRow: at.top + 2, firewallRow: at.top + 3, randomRow: at.top + 4, timeoutRow: at.top + 5,
         searchRow: at.top + head.length + 1,
         firstRow: at.top + head.length + 5, shown: shown.length,
         buttonRow: at.top + head.length + table.length + 1, buttonHits,
@@ -168,6 +173,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
         protocols: PROTOCOLS.filter((p) => protos.has(p)),
         speed: speedTest,
         firewall,
+        random,
         timeout,
       };
       saveConfig(choice);
@@ -196,6 +202,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
           if (i >= 0) flip(protos, PROTOCOLS[i]);
         } else if (y === hit.speedRow) speedTest = !speedTest;
         else if (y === hit.firewallRow) firewall = !firewall;
+        else if (y === hit.randomRow) random = !random;
         else if (y === hit.buttonRow) {
           const id = hit.buttonHits.find(([, a, b]) => x >= a && x < b)?.[0];
           if (id === "start" && start()) return;
@@ -244,6 +251,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall }: Pic
       else if (k === "n") matches.forEach((c) => selected.delete(c));
       else if (k === "s") speedTest = !speedTest;
       else if (k === "f") firewall = !firewall;
+      else if (k === "r") random = !random;
       else if (k === "t") editing = true, seconds = "";
       else if (k === "u" && canUpdate()) return finish("update");
       else if (/^[1-9]$/.test(str ?? "") && PROTOCOLS[Number(str) - 1]) flip(protos, PROTOCOLS[Number(str) - 1]);

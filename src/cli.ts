@@ -29,6 +29,7 @@ Options:
   -a, --all             also show failed attempts in the final table
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
   -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
+  -r, --random          scan the countries in a random order
   -v, --version         show the installed version (and offer to update if a newer one is out)
   -h, --help            show this help
 
@@ -88,6 +89,7 @@ async function main(): Promise<void> {
       version: { type: "boolean", short: "v", default: false },
       "no-speed": { type: "boolean", short: "n", default: false },
       firewall: { type: "boolean", short: "f", default: false },
+      random: { type: "boolean", short: "r", default: false },
     },
   });
   if (a.help) return console.log(HELP);
@@ -107,6 +109,7 @@ async function main(): Promise<void> {
   let protocols: readonly string[] | undefined = a.protocols ? list(a.protocols) : undefined;
   let speedTest = !a["no-speed"];
   let firewall = a.firewall;
+  let random = a.random;
   if (!countries) {
     if (!tty) throw new Error("no terminal for the picker: pass countries with -c");
     const saved = loadConfig();
@@ -116,6 +119,7 @@ async function main(): Promise<void> {
       speedTest: speedTest && (saved?.speed ?? false), // first run: connect-only
       // already on in the app: show it on, since the scan won't turn it off
       firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
+      random: random || (saved?.random ?? false),
     });
     if (!choice) return;
     if (choice === "update") return updateAndRestart();
@@ -123,10 +127,12 @@ async function main(): Promise<void> {
     protocols ??= choice.protocols;
     speedTest = choice.speed;
     firewall = choice.firewall;
+    random = choice.random;
     timeout = choice.timeout;
   }
   protocols ??= PROTOCOLS;
   timeout ??= DEFAULT_TIMEOUT;
+  if (random) countries = countries.map((c) => [Math.random(), c] as const).sort(([x], [y]) => x - y).map(([, c]) => c);
 
   const scan = new Scan(countries, protocols, { timeout, speedTest });
   const blocking = firewall && (await blockInternet());

@@ -52,6 +52,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `1`–`6` | toggle a protocol (`1`–`5` on Linux, which has no IKEv2) |
 | `s` | toggle the speed test (off = connect-only mode) |
 | `f` | toggle "block internet while scanning" (firewall) |
+| `r` | toggle random order: scan the selected countries shuffled, a new order each run |
 | `u` | update to the newer version and restart (only when the picker shows one is out) |
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
@@ -80,6 +81,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
+| `-r, --random` | scan the countries in a random order | picker: saved, or off; with `-c`: off |
 | `-v, --version` | print the installed version; if a newer one is on npm, show the update command (with `sudo` when needed) and ask (y/n) to run it | |
 
 ## Connect-only mode
