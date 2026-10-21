@@ -33,7 +33,7 @@ Options:
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
   -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
   -r, --random          scan the countries in a random order
-  -d, --docker          scan in parallel, in docker containers (as many as docker's CPUs and memory allow, up to 8)
+  -d, --docker          scan in parallel, in docker containers (one per attempt, up to 16, as docker's CPUs and memory allow)
   -v, --version         show the installed version (and offer to update if a newer one is out)
   -h, --help            show this help
 

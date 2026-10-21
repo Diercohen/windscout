@@ -114,16 +114,25 @@ export async function dockerState(): Promise<DockerState> {
 }
 
 const WORKER_MEMORY = 250e6; // bytes per container: Windscribe's app and helper, a tunnel and node take ~120 MB
-const MAX_WORKERS = 8; // ponytail: past this, more containers mostly add load on the one uplink; raise if real scans say so
+// ponytail: past this, more containers mostly add load on the one uplink, and WireGuard keys on the account; raise if real scans say so
+const MAX_WORKERS = 16;
 
 /** Protocols the containers can't do, which a parallel scan runs on this computer after them: IKEv2 (Windscribe's Linux app
  * has none), and WireGuard when their kernel can't run its routing (see DOCKERFILE) */
 export const notInContainers = (protocols: readonly string[], wireguard: boolean) =>
   new Set(protocols.filter((p) => p === "ikev2" || (p === "wireguard" && !wireguard)));
 
-/** Containers for a scan of this many attempts: one per attempt, within docker's CPUs and 3/4 of its memory */
+/** Containers for this many attempts, when docker can run at most `most`: one per attempt; past that, the fewest that need no
+ * more rounds (17 attempts, 16 at most: 9 containers make 2 rounds, as 16 would), since fewer log in sooner and register fewer keys */
+export const containersFor = (attempts: number, most: number) =>
+  attempts <= most ? Math.max(1, attempts) : Math.ceil(attempts / Math.ceil(attempts / most));
+
+// ponytail: rough seconds until n containers are logged in: in a test, 1 took 37 s, 16 at once 38-75 s; refine from real runs
+export const loginSeconds = (containers: number) => 35 + 2.5 * containers;
+
+/** Containers for a scan of this many attempts, within docker's CPUs and 3/4 of its memory */
 export const workerCount = (attempts: number) =>
-  Math.max(1, Math.min(attempts, MAX_WORKERS, info.cpus, Math.floor((info.memory * 0.75) / WORKER_MEMORY)));
+  containersFor(attempts, Math.max(1, Math.min(MAX_WORKERS, info.cpus, Math.floor((info.memory * 0.75) / WORKER_MEMORY))));
 
 export interface Step {
   label: string;

@@ -1,7 +1,7 @@
 // Screen 1: pick countries, protocols, speed test, firewall, random order, timeout and docker, by keyboard or mouse.
 import type { Key } from "node:readline";
 import { loadDockerWireGuard, MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
-import { dockerState, notInContainers, workerCount, type DockerState } from "../docker.js";
+import { dockerState, loginSeconds, notInContainers, workerCount, type DockerState } from "../docker.js";
 import { attemptSeconds, estimate } from "../scan.js";
 import { duration } from "../time.js";
 import { canUpdate, checkUpdate, versionLines } from "../update.js";
@@ -86,7 +86,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       const n = attempts();
       const here = PROTOCOLS.filter((p) => docker && protos.has(p) && notInContainers(PROTOCOLS, wireguard).has(p)); // after the containers
       const inContainers = selected.size * (protos.size - here.length);
-      const slots = docker && dockerAt === "ready" && inContainers ? workerCount(inContainers) : 1;
+      const parallel = docker && dockerAt === "ready" && inContainers > 0;
+      const slots = parallel ? workerCount(inContainers) : 1;
+      const login = parallel ? loginSeconds(slots) : 0; // the containers log in before the scan starts
       const dockerLabel = "parallel scan in docker containers";
       const dockerLine = `${dim(under("d"))} ${docker ? green("● " + dockerLabel) : dim("○ " + dockerLabel)}  ${dim(!docker
         ? "off: one attempt at a time"
@@ -127,7 +129,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         centerIn(buttonLine, width),
         "",
         centerIn(n
-          ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(estimate(inContainers, timeout, slots) + estimate(n - inContainers, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each${slots > 1 ? `, ${slots} at a time` : ""})`)}`
+          ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(login + estimate(inContainers, timeout, slots) + estimate(n - inContainers, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each${slots > 1 ? `, ${slots} at a time` : ""}${login ? `, + ~${duration(login)} login` : ""})`)}`
           : yellow("select at least one country and one protocol"), width),
         centerIn(dim(editing
           ? "type the seconds to wait for each connection · enter/esc done"

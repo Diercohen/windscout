@@ -3,7 +3,7 @@ import { latencyMs, speedMbps } from "./measure.js";
 import { now, sleep } from "./time.js";
 import { connectState, windscribe } from "./windscribe.js";
 
-export type Status = "ok" | "timeout" | "failed" | "no such location" | "no internet" | "interrupted";
+export type Status = "ok" | "timeout" | "failed" | "key limit" | "no such location" | "no internet" | "interrupted";
 
 export interface Result {
   query: string; // what was asked for: a country code, city or nickname
@@ -45,6 +45,8 @@ export async function probe(query: string, protocol: string,
         r.connectS = now() - t;
         break;
       } else if (s.includes("does not exist")) return end("no such location");
+      // Windscribe refused this app another WireGuard key for the account: says nothing about this network
+      else if (s.includes("WireGuard key limit") && now() - t > 3) return end("key limit");
       else if (s === "Disconnected" && now() - t > 3) return end("failed");
       onStep(`connecting ${r.location}`.trim());
       await sleep(1000);

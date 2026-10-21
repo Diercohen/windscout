@@ -39,6 +39,15 @@ export function report(results: Result[], protocols: readonly string[], { all, s
 
   console.log();
   if (avail.length) console.log(avail.join("\n"));
+  const limited = results.filter((r) => r.status === "key limit");
+  if (limited.length) {
+    const many = limited.length > 1, list = (xs: string[]) => [...new Set(xs)].join(",");
+    console.log([
+      yellow(`⚠ ${limited.length} WireGuard attempt${many ? "s" : ""} hit your Windscribe account's limit of WireGuard keys`),
+      dim(`  (each docker container registers a key of its own), so ${many ? "these don't" : "it doesn't"} show whether WireGuard works from here.`),
+      `  To find out, scan ${many ? "them" : "it"} on this computer: ${cyan(`windscout -c "${list(limited.map((r) => r.query))}" -p ${list(limited.map((r) => r.protocol))}`)}`,
+    ].join("\n"));
+  }
   if (!ok.length) {
     console.log(box([yellow("Nothing connected."),
       dim("Try other countries, ports (e.g. -p stealth:443,tcp:443) or a longer --timeout.")],
@@ -48,7 +57,7 @@ export function report(results: Result[], protocols: readonly string[], { all, s
   console.log(main.join("\n"));
 
   const stats = protocols.map((p) => {
-    const tried = results.filter((r) => r.protocol === p && r.status !== "no such location");
+    const tried = results.filter((r) => r.protocol === p && r.status !== "no such location" && r.status !== "key limit");
     const good = tried.filter((r) => r.status === "ok");
     return { p, good: good.length, tried: tried.length, best: sortOk(good).at(0) };
   }).sort((x, y) => y.good - x.good || (y.best?.speedMbps ?? 0) - (x.best?.speedMbps ?? 0) || (x.best?.latencyMs ?? 1e9) - (y.best?.latencyMs ?? 1e9));

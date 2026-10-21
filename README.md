@@ -91,7 +91,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 
 Often you only need to know **what connects**, not how fast it is. Turn the speed test off with `s` in the picker or with `--no-speed`. Each working connection is then checked with a quick latency test only. That saves about 15 s per working connection, and results are ranked by latency. Connect-only is the default on the first run, and the choice is remembered.
 
-Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet). Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
+Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet; `key limit`, in a [parallel scan](#parallel-scan-with-docker): WireGuard couldn't be tried). Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -116,7 +116,7 @@ Between attempts the VPN is disconnected for a moment, and apps on your computer
 
 A normal scan tries one location at a time, because your computer has one VPN connection. Turn on **parallel scan** with `d` in the picker or `--docker`, and each attempt runs in its own docker container instead. Each container has its own Windscribe app (Windscribe's Linux CLI app) and so its own VPN connection, and several locations are tried at once. The results come back to the scan screen, which shows a line per container.
 
-**How many containers:** one per attempt, as many as docker's CPUs allow and three quarters of its memory (at 250 MB each), at most 8. The picker shows the number (`8 at a time`) and the estimate that goes with it.
+**How many containers:** one per attempt, so 1 country with 5 protocols starts 5. Docker's CPUs, three quarters of its memory (at 250 MB each) and a maximum of 16 limit that. With more attempts than that, WindScout starts the fewest containers that need no more rounds: 17 attempts get 9 containers with 2 attempts each, the same 2 rounds that 16 containers would take. Fewer containers log in sooner (in a test, 1 took 37 s, and 16 together up to 75 s) and register fewer WireGuard keys. The picker shows the number (`9 at a time`) and the estimate that goes with it, which includes the time the containers take to log in before the scan starts (`+ ~58s login`: about 35 s, plus 2.5 s per container).
 
 **First time:** if docker isn't installed or isn't running, `d` (or a scan with `--docker`) opens a dialog that says what WindScout will do, and does it once you agree:
 
@@ -141,6 +141,8 @@ The mirrors come from [Mirava](https://github.com/MiravaOrg/Mirava)'s list of mi
 **Kernel check:** each container first checks that docker's Linux kernel gives it what Windscribe needs: a tunnel device (tun) and a firewall (nftables). If not, the scan stops and says so, rather than showing every location as blocked. Windscribe's WireGuard also needs nftables' `fib` in its firewall table, which Docker Desktop's own Linux VM lacks (on macOS, and on Windows without WSL 2). There, WireGuard runs on this computer instead (see below).
 
 **Login:** the containers' Windscribe apps log in with the session that the Windscribe app on this computer is logged in with, so they never log in with your password. Windscribe locks an account that logs in many times at once, and a login per container would do that. WindScout reads the session from the app's settings (`~/.config/Windscribe/Windscribe2.conf` on Linux, the `com.windscribe.Windscribe2` defaults on macOS, `HKEY_CURRENT_USER\Software\Windscribe\Windscribe2` in the registry on Windows) and hands it to each container on its standard input, not on a command line, where other programs could see it. Each container's docker volume (`windscout-1`, `windscout-2`, …) keeps its app's settings for the next scans, with the WireGuard keys it registered with your account. A volume that another account used starts over. If you log out of the Windscribe app, the containers' session ends too, and the next scan gives them the new one.
+
+**WireGuard keys:** each container's app registers a WireGuard key of its own with your account the first time it uses WireGuard, and keeps it in its volume for later scans. Windscribe allows each account only so many keys. A container past that limit can't try WireGuard, which says nothing about your network, so the grid shows `key limit` (in yellow) instead of ✗, and those attempts don't count in the report's per-protocol numbers. Under the grid, the report says how many there were and gives the command that tries them on this computer, which has a key of its own: `windscout -c "DE,NL" -p wireguard`.
 
 WindScout 0.6.0 asked for your username and password instead, and could save them in `~/.config/windscout/login.json`. WindScout now deletes that file.
 

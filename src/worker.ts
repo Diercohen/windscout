@@ -47,9 +47,10 @@ export async function worker(): Promise<void> {
   writeFileSync(SETTINGS, withSession(ini, session));
   // no systemd in a container: start the app like its unit would, as this user (its CLI refuses root)
   spawn(APP, { stdio: "ignore" }).on("error", () => {}); // not there: its CLI never answers below
-  // its CLI answers once it's up, and says logged in once Windscribe accepts the session, or the error it got instead
+  // its CLI answers once it's up, and says logged in once Windscribe accepts the session, or the error it got instead.
+  // One container took 37 s in a test, 16 at once 38-75 s
   let status = "";
-  for (const t = now(); now() - t < 120 && !/Login state: (Logged in|Error)/.test(status = await windscribe("status")); ) await sleep(1000);
+  for (const t = now(); now() - t < 180 && !/Login state: (Logged in|Error)/.test(status = await windscribe("status")); ) await sleep(1000);
   if (!status.includes("Logged in")) {
     const state = status.match(/^Login state: (.*)$/m)?.[1].trim();
     return void console.error(state ? `Windscribe's app didn't log in with this computer's session (${state})` : "Windscribe's app didn't start in the container");

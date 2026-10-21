@@ -33,7 +33,9 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
     const eta = (total - done) * (done ? elapsed / done : attemptSeconds(timeout) / slots.length);
     const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame++ % 10];
     const ok = sortOk(results);
-    const failed = finished.filter((c) => !results.some((r) => r.query === c && r.status === "ok"));
+    // blocked: nothing worked, and something was really tried (a key limit tries nothing)
+    const failed = finished.filter((c) => !results.some((r) => r.query === c && r.status === "ok")
+      && results.some((r) => r.query === c && r.status !== "key limit"));
     const attempt = ({ current: c }: Slot) => (c ? `${flag(c.country)} ${countryName(c.country)} ${dim("·")} ${c.protocol}` : "");
     const many = slots.length > 1; // a parallel scan: a line per container
 
