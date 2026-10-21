@@ -18,3 +18,12 @@ test("the username and password 0.6.0 saved are deleted, and nothing else", () =
   assert.equal(existsSync(CONFIG), true);
   forgetLogin(); // none left: fine
 });
+
+test("the speed test is hidden: a saved \"on\" reads as off, and the rest of the choice stays", async () => {
+  const { loadConfig } = await import("../dist/config.js");
+  mkdirSync(dirname(CONFIG), { recursive: true });
+  writeFileSync(CONFIG, JSON.stringify({ countries: ["DE"], protocols: ["tcp"], speed: true, random: true, timeout: 20 }));
+  const c = loadConfig();
+  assert.equal(c.speed, false);
+  assert.deepEqual([c.countries, c.protocols, c.random, c.timeout], [["DE"], ["tcp"], true, 20]);
+});

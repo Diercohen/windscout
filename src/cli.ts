@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // WindScout: find which Windscribe locations and protocols actually work from here.
 // Drives the official windscribe-cli: connects to each country/protocol pair,
-// measures latency and download speed through the tunnel, prints a ranked table.
+// measures latency through the tunnel, prints a ranked table.
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, loadConfig, loadDockerWireGuard, MIN_TIMEOUT, saveDockerWireGuard } from "./config.js";
+import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, loadConfig, loadDockerWireGuard, MIN_TIMEOUT, saveDockerWireGuard, SPEED_TEST } from "./config.js";
 import { notInContainers, stopWorkers } from "./docker.js";
 import { probe, type Result } from "./probe.js";
 import { Scan, type After } from "./scan.js";
@@ -22,7 +22,7 @@ import { worker } from "./worker.js";
 
 const HELP = `Usage: windscout [options]
 
-Find which Windscribe locations and protocols work from your network, ranked by speed.
+Find which Windscribe locations and protocols work from your network, ranked by ${SPEED_TEST ? "speed" : "latency"}.
 Without -c it opens an interactive country picker (your selection is remembered).
 
 Options:
@@ -31,8 +31,7 @@ Options:
   -P, --all-ports       try each protocol on every port Windscribe offers for it, not just its default
   -t, --timeout SEC     seconds to wait for each connection, at least ${MIN_TIMEOUT} (default: saved, or ${DEFAULT_TIMEOUT})
   -a, --all             also show failed attempts in the final table
-  -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
-  -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
+${SPEED_TEST ? "  -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)\n" : ""}  -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
   -r, --random          scan the countries in a random order
   -d, --docker          scan in parallel, in docker containers (one per attempt, up to 16, as docker's CPUs and memory allow)
   -v, --version         show the installed version (and offer to update if a newer one is out)
@@ -94,7 +93,7 @@ async function main(): Promise<void> {
       all: { type: "boolean", short: "a", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
-      "no-speed": { type: "boolean", short: "n", default: false },
+      "no-speed": { type: "boolean", short: "n", default: false }, // still accepted while the speed test is hidden
       firewall: { type: "boolean", short: "f", default: false },
       random: { type: "boolean", short: "r", default: false },
       docker: { type: "boolean", short: "d", default: false },
@@ -121,7 +120,7 @@ async function main(): Promise<void> {
   const tty = Boolean(process.stdin.isTTY && out.isTTY);
   let countries = a.countries ? list(a.countries) : undefined;
   let protocols: readonly string[] | undefined = a.protocols ? list(a.protocols) : undefined;
-  let speedTest = !a["no-speed"];
+  let speedTest = SPEED_TEST && !a["no-speed"];
   let firewall = a.firewall;
   let random = a.random;
   let allPorts = a["all-ports"];

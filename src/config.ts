@@ -4,6 +4,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
+// The speed test is hidden: every scan is connect-only, and a saved "on" reads as off. Its code stays; true brings it back
+export const SPEED_TEST = false;
+
 export const DEFAULT_TIMEOUT = 15;
 export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that would have worked
 
@@ -28,7 +31,7 @@ export function loadConfig(): Choice | null {
     return {
       countries: (c.countries ?? []).filter((x: string) => COUNTRIES.includes(x)),
       protocols: (c.protocols ?? []).filter((x: string) => PROTOCOLS.includes(x)),
-      speed: c.speed !== false,
+      speed: SPEED_TEST && c.speed !== false,
       firewall: c.firewall === true,
       random: c.random === true,
       allPorts: c.allPorts === true,

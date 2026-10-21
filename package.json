@@ -1,7 +1,7 @@
 {
   "name": "windscout",
-  "version": "0.6.3",
-  "description": "Find which Windscribe locations and protocols work from your network, ranked by speed (unofficial)",
+  "version": "0.6.4",
+  "description": "Find which Windscribe locations and protocols work from your network, ranked by latency (unofficial)",
   "type": "module",
   "bin": {
     "windscout": "dist/cli.js"
@@ -25,14 +25,12 @@
   "keywords": [
     "windscribe",
     "vpn",
-    "speedtest",
     "wireguard",
     "stealth",
     "cli",
     "censorship",
     "firewall",
     "unblock",
-    "vpn-speed-test",
     "server-finder",
     "docker"
   ],

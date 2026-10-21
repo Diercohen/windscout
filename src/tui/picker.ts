@@ -1,6 +1,7 @@
-// Screen 1: pick countries, protocols, all ports, speed test, firewall, random order, timeout and docker, by keyboard or mouse.
+// Screen 1: pick countries, protocols, all ports, speed test (while not hidden), firewall, random order, timeout and docker,
+// by keyboard or mouse.
 import type { Key } from "node:readline";
-import { loadDockerWireGuard, MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
+import { loadDockerWireGuard, MIN_TIMEOUT, saveConfig, SPEED_TEST, type Choice } from "../config.js";
 import { dockerState, loginSeconds, notInContainers, workerCount, type DockerState } from "../docker.js";
 import { attemptSeconds, estimate } from "../scan.js";
 import { duration } from "../time.js";
@@ -125,10 +126,11 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       ];
       const buttonLine = buttons.map(([id, label]) => (id === "start" ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
+      const settings = [protoLine, portsLine, ...(SPEED_TEST ? [speedLine] : []), fwLine, randomLine, timeoutLine, dockerLine];
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
-        { caption: search, captionRight: dim(range), minWidth: Math.max(...[protoLine, portsLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine].map(vw)) + 4 });
+        { caption: search, captionRight: dim(range), minWidth: Math.max(...settings.map(vw)) + 4 });
       const width = vw(table[0]);
-      const head = box([protoLine, portsLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine], {
+      const head = box(settings, {
         title: bold(cyan("WindScout")),
         right: `${bold(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
@@ -148,13 +150,14 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
           ? "type to filter · ↑↓ move · enter/esc done"
           // both lines fit 80 columns
           : `↑↓ move · space select · a/n ${query ? "all/none shown · esc clear" : "all/none · / search"} · enter start · q quit`), width),
-        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · p ports · s speed · f firewall · r random · t timeout · d docker`), width),
+        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · p ports${SPEED_TEST ? " · s speed" : ""} · f firewall · r random · t timeout · d docker`), width),
       ];
       if (message) lines.push(centerIn(yellow(message), width));
       lines.push("", ...version.map((l) => centerIn(l, width)), centerIn(dim(repoLink), width));
       const at = draw(lines);
 
       // click map, in screen coordinates
+      const row = (line: string) => at.top + 1 + settings.indexOf(line); // a settings line, under the box's top border
       let px = at.left + 2; // "│ " before the protocol line
       const protoHits = PROTOCOLS.map((p, i) => {
         const len = vw(`${i + 1} ● ${p}`);
@@ -170,8 +173,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         return range;
       });
       hit = {
-        protoRow: at.top + 1, protoHits, portsRow: at.top + 2, speedRow: at.top + 3, firewallRow: at.top + 4, randomRow: at.top + 5,
-        timeoutRow: at.top + 6, dockerRow: at.top + 7,
+        protoRow: row(protoLine), protoHits, portsRow: row(portsLine), speedRow: SPEED_TEST ? row(speedLine) : -1,
+        firewallRow: row(fwLine), randomRow: row(randomLine), timeoutRow: row(timeoutLine), dockerRow: row(dockerLine),
         searchRow: at.top + head.length + 1,
         firstRow: at.top + head.length + 5, shown: shown.length,
         buttonRow: at.top + head.length + table.length + 1, buttonHits,
@@ -305,7 +308,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       else if (k === "a") matches.forEach((c) => selected.add(c));
       else if (k === "n") matches.forEach((c) => selected.delete(c));
       else if (k === "p") allPorts = !allPorts;
-      else if (k === "s") speedTest = !speedTest;
+      else if (k === "s" && SPEED_TEST) speedTest = !speedTest;
       else if (k === "f") firewall = !firewall;
       else if (k === "r") random = !random;
       else if (k === "t") editing = true, seconds = "";
