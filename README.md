@@ -140,9 +140,9 @@ The mirrors come from [Mirava](https://github.com/MiravaOrg/Mirava)'s list of mi
 
 **Kernel check:** each container first checks that docker's Linux kernel gives it what Windscribe needs: a tunnel device (tun) and a firewall (nftables). If not, the scan stops and says so, rather than showing every location as blocked. Windscribe's WireGuard also needs nftables' `fib` in its firewall table, which Docker Desktop's own Linux VM lacks (on macOS, and on Windows without WSL 2). There, WireGuard runs on this computer instead (see below).
 
-**Login:** each container's Windscribe app logs in once. WindScout asks for your Windscribe username and password (and a 2FA code or captcha when Windscribe asks for one) and passes them to the containers, one at a time. Each login is kept in that container's docker volume (`windscout-1`, `windscout-2`, …), so later scans don't ask.
+**Login:** the containers' Windscribe apps log in with the session that the Windscribe app on this computer is logged in with, so they never log in with your password. Windscribe locks an account that logs in many times at once, and a login per container would do that. WindScout reads the session from the app's settings (`~/.config/Windscribe/Windscribe2.conf` on Linux, the `com.windscribe.Windscribe2` defaults on macOS, `HKEY_CURRENT_USER\Software\Windscribe\Windscribe2` in the registry on Windows) and hands it to each container on its standard input, not on a command line, where other programs could see it. Each container's docker volume (`windscout-1`, `windscout-2`, …) keeps its app's settings for the next scans, with the WireGuard keys it registered with your account. A volume that another account used starts over. If you log out of the Windscribe app, the containers' session ends too, and the next scan gives them the new one.
 
-**Remember username and password** is ticked to start with (tab to it and press space, or click it). Once the login works, WindScout saves both in `~/.config/windscout/login.json`, as plain text that only you can read. Then containers that are new next time (a scan with more attempts) log in by themselves, with no terminal too; a 2FA code is never saved, so with 2FA they still ask. Untick it and nothing is saved, and a login saved before is forgotten. Deleting that file forgets it too. With `-c` and no terminal, only containers that are logged in already, or can log in with the remembered login, take part.
+WindScout 0.6.0 asked for your username and password instead, and could save them in `~/.config/windscout/login.json`. WindScout now deletes that file.
 
 **Measuring:** the containers share your internet connection, so they take turns measuring latency and speed while the connecting happens in parallel. Numbers stay comparable with a normal scan. Most of the time saved comes from attempts that hang until the timeout, which overlap now.
 
@@ -152,7 +152,7 @@ The mirrors come from [Mirava](https://github.com/MiravaOrg/Mirava)'s list of mi
 - This computer's own Windscribe connection is disconnected at the start and stays off while the containers scan, since it would carry their traffic too.
 - No firewall: "block internet while scanning" isn't used, since it would block the containers' traffic too.
 
-The containers are removed after the scan. To remove the logins too, run `docker volume rm windscout-1 windscout-2 …`. To remove the image, run `docker rmi windscout-worker`.
+The containers are removed after the scan. To remove their settings too (and the session in them), run `docker volume rm windscout-1 windscout-2 …`. To remove the image, run `docker rmi windscout-worker`.
 
 ## Output
 

@@ -1,4 +1,5 @@
 // Parallel scans: a docker container per slot, each with its own Windscribe app, so each has its own tunnel.
+// The apps log in with the session this computer's app is logged in with.
 // A container runs `windscout --worker` (worker.ts) and takes attempts from here one at a time:
 // a JSON object per line on its stdin, answered the same way on its stdout.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -11,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import type { Result } from "./probe.js";
 import type { Prober } from "./scan.js";
 import { sleep } from "./time.js";
+import type { Session } from "./windscribe.js";
 
 const IMAGE = "windscout-worker";
 const ROOT = new URL("..", import.meta.url); // this package: its package.json and dist/ go into the image
@@ -32,7 +34,7 @@ const REGISTRIES = [...(process.env.WINDSCOUT_REGISTRY_MIRRORS?.split(",").map((
 // The CMD first checks the kernel (WSL's builds tun and parts of nftables as modules): no tun or nftables, no tunnel, so
 // the container stops saying so instead of scanning. The helper's WireGuard routing also puts a fib rule in an inet table,
 // which Docker Desktop's own kernel (macOS, Windows without WSL) can't run: WS_WIREGUARD=0 then, and it runs on this computer.
-// No systemd in a container: start the helper (root) and the app (as a user: its CLI refuses root) like their units would
+// No systemd in a container: start the helper (root) like its unit would; the worker starts the app once it has the session
 const DOCKERFILE = `FROM ${BASE_TAG}
 ENV LANG=C.UTF-8
 RUN for m in deb.debian.org mirror.shatel.ir mirror.iranserver.com mirror.mobinhost.com mirror2.chabokan.net; do \\
@@ -54,7 +56,6 @@ CMD mkdir -p /dev/net && { [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200; }
   nft 'add table inet wscheck; add chain inet wscheck p { type filter hook prerouting priority 0; }; add rule inet wscheck p fib saddr type != local drop; delete table inet wscheck' 2>/dev/null \\
   && wg=1 || wg=0; \\
   /opt/windscribe/helper >/dev/null 2>&1 & \\
-  runuser -u ws -- env HOME=/home/ws /opt/windscribe/Windscribe >/dev/null 2>&1 & \\
   exec runuser -u ws -- env HOME=/home/ws WS_WIREGUARD=$wg node /app/dist/cli.js --worker
 `;
 
@@ -113,7 +114,7 @@ export async function dockerState(): Promise<DockerState> {
 }
 
 const WORKER_MEMORY = 250e6; // bytes per container: Windscribe's app and helper, a tunnel and node take ~120 MB
-const MAX_WORKERS = 8; // ponytail: past this, more containers mostly add logins and load on the one uplink; raise if real scans say so
+const MAX_WORKERS = 8; // ponytail: past this, more containers mostly add load on the one uplink; raise if real scans say so
 
 /** Protocols the containers can't do, which a parallel scan runs on this computer after them: IKEv2 (Windscribe's Linux app
  * has none), and WireGuard when their kernel can't run its routing (see DOCKERFILE) */
@@ -249,8 +250,6 @@ export async function buildImage(onLine: (line: string) => void): Promise<void> 
 }
 
 type Message = Partial<{ // from a worker
-  need: "login" | "input"; // it waits for credentials, or for the answer to what the CLI asked (text): a 2FA code, a captcha
-  text: string;
   ready: boolean; // logged in: takes attempts
   wireguard: boolean; // with ready: its kernel lets Windscribe's WireGuard set up its routing
   step: string;
@@ -258,18 +257,6 @@ type Message = Partial<{ // from a worker
   measured: boolean;
   result: Result;
 }>;
-
-export interface Credentials {
-  username: string;
-  password: string;
-}
-
-/** How the containers' Windscribe login gets to the user */
-export interface LoginPrompt {
-  credentials(error: string): Promise<Credentials | null>; // error: why the last try failed ("" the first time); null: cancelled
-  answer(question: string): Promise<string | null>; // what the CLI asks after the password: a 2FA code, a captcha
-  loggedIn(c: Credentials): void; // a container logged in with these
-}
 
 // one at a time: `await lock()` resolves to the function that lets the next one in
 function mutex(): () => Promise<() => void> {
@@ -284,21 +271,16 @@ const running = new Map<string, ChildProcess>(); // container name → its `dock
 const removeAll = () => running.size && spawnSync("docker", ["rm", "-f", ...running.keys()], { stdio: "ignore" });
 process.on("exit", removeAll);
 
-/** Starts n containers and logs them in to Windscribe, one at a time; resolves to a prober for each container that got ready,
- * and whether WireGuard works in them */
-export async function startWorkers(n: number, prompt: LoginPrompt, onStatus: (text: string) => void) {
-  const measuring = mutex(), loggingIn = mutex();
+/** Starts n containers, their apps logged in with this computer's session; resolves to a prober for each container that got
+ * ready, and whether WireGuard works in them */
+export async function startWorkers(n: number, session: Session, onStatus: (text: string) => void) {
+  const measuring = mutex();
   let wireguard = true;
-  let creds: Credentials | null | undefined; // undefined: not asked yet; null: the user cancelled
   let ready = 0;
-  const credentials = async (error: string) => {
-    if (creds !== null && (error || !creds)) creds = await prompt.credentials(error);
-    return creds;
-  };
 
   const start = (i: number) => new Promise<Prober | null>((resolve) => {
     const name = `windscout-${process.pid}-${i + 1}`;
-    // its own volume keeps its Windscribe login for the next scans
+    // its own volume keeps its app's settings for the next scans: its WireGuard keys, registered with Windscribe once
     // it makes /dev/net/tun itself: Docker's Linux VM may have none (WSL loads tun as a module), and --device needs one there
     const p = spawn("docker", ["run", "-i", "--rm", "--init", "--name", name, "--cap-add", "NET_ADMIN", "--device-cgroup-rule", "c 10:200 rwm",
       "--sysctl", "net.ipv4.conf.all.src_valid_mark=1", "-v", `windscout-${i + 1}:/home/ws/.config/Windscribe`, IMAGE],
@@ -306,6 +288,7 @@ export async function startWorkers(n: number, prompt: LoginPrompt, onStatus: (te
     running.set(name, p);
     const send = (m: object) => p.stdin.write(JSON.stringify(m) + "\n");
     p.stdin.on("error", () => {}); // it stopped: "close" deals with that
+    send({ session }); // on stdin, not in the command line or the environment, where ps and docker inspect show it
     let on = (_: Message) => {}; // the current phase's message handler
     let fail = (_: string) => {}; // and what it does when the container stops
     let dead = "", err = "";
@@ -348,23 +331,13 @@ export async function startWorkers(n: number, prompt: LoginPrompt, onStatus: (te
         send({ probe: { query, protocol, timeout, speedTest } });
       });
 
-    let leave: (() => void) | null = null, used: Credentials | null = null, unused = false; // the login lock while logging in; with what; or no login for it
-    fail = (why) => (leave?.(), unused || onStatus(`container ${i + 1}: ${why}`), resolve(null));
-    on = async (m) => {
-      if (m.need === "login") {
-        leave ??= await loggingIn();
-        const c = await credentials(m.text ?? "");
-        if (c) (used = c), send({ login: c });
-        else (unused = true), p.stdin.end(); // none: the worker gives up, its container stops
-      } else if (m.need === "input") send({ input: (await prompt.answer(m.text ?? "")) ?? "" });
-      else if (m.ready) {
-        leave?.();
-        if (used) prompt.loggedIn(used);
-        wireguard &&= m.wireguard !== false;
-        fail = () => {};
-        onStatus(`${++ready} of ${n} ready`);
-        resolve(prober);
-      }
+    fail = (why) => (onStatus(`container ${i + 1}: ${why}`), resolve(null));
+    on = (m) => {
+      if (!m.ready) return;
+      wireguard &&= m.wireguard !== false;
+      fail = () => {};
+      onStatus(`${++ready} of ${n} ready`);
+      resolve(prober);
     };
   });
 

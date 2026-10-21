@@ -1,16 +1,13 @@
-// The picker's selection, and the docker containers' Windscribe login if wanted, remembered between runs.
+// The picker's selection, and what the last parallel scan found its containers can do, remembered between runs.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Credentials } from "./docker.js";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
 export const DEFAULT_TIMEOUT = 15;
 export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that would have worked
 
 export const CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "windscout", "config.json");
-// ponytail: plain text that only this user can read, like git's credential store; the OS keychain if that's not enough
-export const LOGIN_FILE = join(dirname(CONFIG), "login.json");
 const DOCKER_FILE = join(dirname(CONFIG), "docker.json"); // what the last parallel scan found its containers can do
 
 export interface Choice {
@@ -64,22 +61,9 @@ export function saveDockerWireGuard(wireguard: boolean): void {
   } catch {} // not being able to remember isn't worth failing the scan
 }
 
-/** The Windscribe login remembered for the docker containers; null when there's none */
-export function loadLogin(): Credentials | null {
+/** Deletes the Windscribe username and password that 0.6.0 saved for the docker containers: they log in with this computer's session now */
+export function forgetLogin(): void {
   try {
-    const { username, password } = JSON.parse(readFileSync(LOGIN_FILE, "utf8"));
-    return typeof username === "string" && typeof password === "string" ? { username, password } : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Remembers the login, or forgets it (null) */
-export function saveLogin(c: Credentials | null): void {
-  try {
-    rmSync(LOGIN_FILE, { force: true }); // a new file gets the mode below; an old one would keep its own
-    if (!c) return;
-    mkdirSync(dirname(LOGIN_FILE), { recursive: true });
-    writeFileSync(LOGIN_FILE, JSON.stringify(c) + "\n", { mode: 0o600 });
-  } catch {} // not being able to remember isn't worth failing the scan
+    rmSync(join(dirname(CONFIG), "login.json"), { force: true });
+  } catch {} // not being able to delete it isn't worth failing the scan
 }

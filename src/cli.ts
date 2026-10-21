@@ -5,7 +5,7 @@
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { CONFIG, DEFAULT_TIMEOUT, loadConfig, loadDockerWireGuard, MIN_TIMEOUT, saveDockerWireGuard } from "./config.js";
+import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, loadConfig, loadDockerWireGuard, MIN_TIMEOUT, saveDockerWireGuard } from "./config.js";
 import { notInContainers, stopWorkers } from "./docker.js";
 import { probe, type Result } from "./probe.js";
 import { Scan, type After } from "./scan.js";
@@ -100,8 +100,9 @@ async function main(): Promise<void> {
   });
   if (a.worker) {
     await worker();
-    process.exit(); // its stdin may still be open: it has no login to scan with
+    process.exit(); // its stdin may still be open: its app didn't log in
   }
+  forgetLogin();
   if (a.help) return console.log(HELP);
   checkUpdate(); // runs while the app starts and the user picks, before the VPN starts switching
   if (a.version) {

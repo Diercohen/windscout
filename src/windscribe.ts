@@ -1,6 +1,7 @@
 // The Windscribe desktop app, driven through the windscribe-cli it ships with.
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { sleep } from "./time.js";
 
@@ -72,6 +73,58 @@ export async function waitForLogin(): Promise<string> {
     throw new Error("Windscribe is not logged in, or the app is not running. Open the Windscribe app and log in, then try again."
       + `\nDon't have it? ${DOWNLOAD_URL}`);
   return status;
+}
+
+/** A session as the app's settings keep it: the account's ID and the session's token, which the app logs in with when it starts */
+export interface Session {
+  userId: string;
+  authHash: string;
+}
+
+// The app's settings (Qt's, as Windscribe/Windscribe2): this INI file on Linux, the user's defaults on macOS, the registry on Windows
+export const SETTINGS = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "Windscribe", "Windscribe2.conf");
+
+/** A top-level value in the text of the INI file: Qt puts those under [General] */
+export function iniValue(ini: string, key: string): string | undefined {
+  let general = false;
+  for (const line of ini.split(/\r?\n/)) {
+    if (line.startsWith("[")) general = line.trim() === "[General]";
+    else if (general && line.startsWith(`${key}=`)) return line.slice(key.length + 1);
+  }
+}
+
+/** The INI file's text with the app logging in with this session when it starts. Settings another account left start over:
+ * the WireGuard keys in them are registered with that account */
+export function withSession(ini: string, { userId, authHash }: Session): string {
+  if (userId && iniValue(ini, "userId") !== userId) ini = "";
+  let general = false;
+  const lines = ini.split("\n").filter((line) => {
+    if (line.startsWith("[")) general = line.trim() === "[General]";
+    return !(general && line.startsWith("authHash="));
+  });
+  const at = lines.findIndex((line) => line.trim() === "[General]");
+  lines.splice(at + 1, 0, ...(at < 0 ? ["[General]"] : []), `authHash=${authHash}`);
+  return lines.join("\n");
+}
+
+/** One of the app's top-level settings on this computer; "" when it isn't there, or doesn't look like an ID or a token */
+function setting(key: string): string {
+  const run = (cmd: string, args: string[]) =>
+    execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+  try {
+    const value = process.platform === "darwin" ? run("defaults", ["read", "com.windscribe.Windscribe2", key])
+      : process.platform === "win32" ? run("reg", ["query", "HKCU\\Software\\Windscribe\\Windscribe2", "/v", key]).match(/REG_SZ\s+(.*)/)?.[1]
+      : iniValue(readFileSync(SETTINGS, "utf8"), key);
+    return value?.trim().match(/^[\w:.+/=-]+$/)?.[0] ?? "";
+  } catch {
+    return ""; // no such setting, or no settings
+  }
+}
+
+/** The session this computer's app is logged in with; null when its settings don't have one */
+export function session(): Session | null {
+  const authHash = setting("authHash");
+  return authHash ? { userId: setting("userId"), authHash } : null;
 }
 
 export const isFirewallOn = (status: string) => /^Firewall state: On/m.test(status);

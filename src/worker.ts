@@ -1,22 +1,23 @@
 // windscout --worker: runs in a parallel scan's docker container (docker.ts), beside the container's own Windscribe app.
 // Takes the host's messages from stdin and answers on stdout, a JSON object per line.
 import { spawn } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { probe } from "./probe.js";
-import { sleep } from "./time.js";
-import { CLI, windscribe } from "./windscribe.js";
+import { now, sleep } from "./time.js";
+import { SETTINGS, windscribe, withSession, type Session } from "./windscribe.js";
+
+const APP = "/opt/windscribe/Windscribe"; // as the image installs it
 
 type Message = Partial<{ // from the host
-  login: { username: string; password: string } | null;
-  input: string;
+  session: Session; // the first message: the session this computer's app is logged in with
   probe: { query: string; protocol: string; timeout: number; speedTest: boolean };
   go: boolean; // our turn to measure
   stop: boolean;
 }>;
 
 const send = (m: object) => process.stdout.write(JSON.stringify(m) + "\n");
-// the CLI mixes JSON log lines into its output
-const text = (s: string) => s.split("\n").filter((l) => !l.startsWith('{"tm"')).join("\n").trim();
 
 export async function worker(): Promise<void> {
   const inbox: Message[] = [];
@@ -34,17 +35,24 @@ export async function worker(): Promise<void> {
     return inbox.shift() ?? null;
   };
 
-  // the app starts beside us (the image's CMD); its CLI answers once it's up
+  // The app logs in with this computer's session, which goes in its settings before it starts: no login of its own, since
+  // Windscribe locks an account that logs in many times at once. Never log out here: that would end this computer's session too
+  const session = (await next())?.session;
+  if (!session) return;
+  let ini = "";
+  try {
+    ini = readFileSync(SETTINGS, "utf8");
+  } catch {} // a new volume: no settings yet
+  mkdirSync(dirname(SETTINGS), { recursive: true });
+  writeFileSync(SETTINGS, withSession(ini, session));
+  // no systemd in a container: start the app like its unit would, as this user (its CLI refuses root)
+  spawn(APP, { stdio: "ignore" }).on("error", () => {}); // not there: its CLI never answers below
+  // its CLI answers once it's up, and says logged in once Windscribe accepts the session, or the error it got instead
   let status = "";
-  for (let i = 0; i < 60 && !(status = await windscribe("status")).includes("Login state"); i++) await sleep(1000);
-  if (!status.includes("Login state")) return void console.error("Windscribe's app didn't start in the container");
+  for (const t = now(); now() - t < 120 && !/Login state: (Logged in|Error)/.test(status = await windscribe("status")); ) await sleep(1000);
   if (!status.includes("Logged in")) {
-    for (let error = ""; ; ) {
-      send({ need: "login", text: error });
-      const m = await next();
-      if (!m?.login) return; // no credentials for us: this container sits out the scan
-      if (!(error = await login(m.login.username, m.login.password, next))) break;
-    }
+    const state = status.match(/^Login state: (.*)$/m)?.[1].trim();
+    return void console.error(state ? `Windscribe's app didn't log in with this computer's session (${state})` : "Windscribe's app didn't start in the container");
   }
   send({ ready: true, wireguard: process.env.WS_WIREGUARD !== "0" }); // the image's CMD checked the kernel
   for (let m: Message | null; (m = await next()); ) {
@@ -67,27 +75,4 @@ export async function worker(): Promise<void> {
     });
     send({ result });
   }
-}
-
-/** windscribe-cli login, with the password on its stdin; what it asks next (a 2FA code, a captcha) goes to the host.
- * "" once logged in, else why not */
-function login(username: string, password: string, next: () => Promise<Message | null>): Promise<string> {
-  return new Promise((resolve) => {
-    const p = spawn(CLI, ["login", username], { stdio: ["pipe", "pipe", "ignore"] });
-    p.stdin.on("error", () => {});
-    p.stdin.write(password + "\n");
-    let out = "";
-    p.stdout.on("data", async (d) => {
-      out += d;
-      const asked = text(out);
-      // a question ends the output, with no newline after it: "2FA code:", or under a captcha "…to continue:"
-      if (!asked.endsWith(":")) return;
-      out = "";
-      if (asked.endsWith("Password:")) return; // answered already
-      send({ need: "input", text: asked });
-      p.stdin.write(((await next())?.input ?? "") + "\n");
-    });
-    // it exits 0 whether that worked or not: ask the app
-    p.on("close", async () => resolve((await windscribe("status")).includes("Logged in") ? "" : text(out).split("\n").at(-1) || "login failed"));
-  });
 }
