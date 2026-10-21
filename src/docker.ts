@@ -120,7 +120,7 @@ const MAX_WORKERS = 16;
 /** Protocols the containers can't do, which a parallel scan runs on this computer after them: IKEv2 (Windscribe's Linux app
  * has none), and WireGuard when their kernel can't run its routing (see DOCKERFILE) */
 export const notInContainers = (protocols: readonly string[], wireguard: boolean) =>
-  new Set(protocols.filter((p) => p === "ikev2" || (p === "wireguard" && !wireguard)));
+  new Set(protocols.filter((p) => /^ikev2(:|$)/.test(p) || (!wireguard && /^wireguard(:|$)/.test(p))));
 
 /** Containers for this many attempts, when docker can run at most `most`: one per attempt; past that, the fewest that need no
  * more rounds (17 attempts, 16 at most: 9 containers make 2 rounds, as 16 would), since fewer log in sooner and register fewer keys */

@@ -17,6 +17,23 @@ let cliBin = CLI;
 
 // IKEv2 is offered by the macOS/Windows apps only
 export const PROTOCOLS: readonly string[] = ["wireguard", ...(process.platform === "linux" ? [] : ["ikev2"]), "stealth", "wstunnel", "udp", "tcp"];
+
+let portLists: Promise<Map<string, number[]>> | undefined;
+/** The ports the app offers for each protocol, its default first; [] where it lists none (IKEv2 on Linux, or apps before 2.22,
+ * which have no `ports`). Asked once, one protocol at a time: windscribe-cli runs one at a time */
+export const protocolPorts = () => (portLists ??= (async () => {
+  const lists = new Map<string, number[]>();
+  for (const p of PROTOCOLS) {
+    const out = await windscribe("ports", p).catch(() => ""); // can't ask: no list, so the default port
+    lists.set(p, out.match(/^\d+(, \d+)*$/m)?.[0].split(", ").map(Number) ?? []);
+  }
+  return lists;
+})());
+
+/** Each protocol given without a port, on every port in lists: "tcp" → "tcp:443", "tcp:587", …; the rest as given */
+export const withPorts = (protocols: readonly string[], lists: ReadonlyMap<string, number[]>) =>
+  protocols.flatMap((p) => (!p.includes(":") && lists.get(p)?.length ? lists.get(p)!.map((port) => `${p}:${port}`) : [p]));
+
 // ponytail: hardcoded because `windscribe-cli locations` returns nothing on 2.24; refresh when Windscribe adds countries
 export const COUNTRIES: readonly string[] = `US CA MX BR AR CL CO PE GB IE FR DE NL BE LU CH AT IT ES PT DK NO SE FI IS
 PL CZ SK HU RO BG GR CY TR RS HR SI BA MK AL MD UA EE LV LT IL AE AZ GE AM KZ IN JP KR

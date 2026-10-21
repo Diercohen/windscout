@@ -1,11 +1,11 @@
-// Screen 1: pick countries, protocols, speed test, firewall, random order, timeout and docker, by keyboard or mouse.
+// Screen 1: pick countries, protocols, all ports, speed test, firewall, random order, timeout and docker, by keyboard or mouse.
 import type { Key } from "node:readline";
 import { loadDockerWireGuard, MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
 import { dockerState, loginSeconds, notInContainers, workerCount, type DockerState } from "../docker.js";
 import { attemptSeconds, estimate } from "../scan.js";
 import { duration } from "../time.js";
 import { canUpdate, checkUpdate, versionLines } from "../update.js";
-import { COUNTRIES, PROTOCOLS } from "../windscribe.js";
+import { COUNTRIES, protocolPorts, PROTOCOLS } from "../windscribe.js";
 import { countryName, flag } from "./country.js";
 import { setupDocker } from "./docker.js";
 import { draw, enterScreen, input, leaveScreen, out, repoLink, type Mouse } from "./terminal.js";
@@ -17,6 +17,7 @@ export interface PickerOptions {
   speedTest: boolean;
   firewall: boolean;
   random: boolean;
+  allPorts: boolean;
   docker: boolean;
 }
 
@@ -26,6 +27,7 @@ type Button = "start" | "all" | "none" | "quit";
 interface Hits {
   protoRow: number;
   protoHits: [number, number][]; // [from, to) columns of each protocol
+  portsRow: number;
   speedRow: number;
   firewallRow: number;
   randomRow: number;
@@ -41,18 +43,21 @@ interface Hits {
 const flip = <T>(set: Set<T>, value: T) => (set.has(value) ? set.delete(value) : set.add(value));
 
 /** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
-export function pick(saved: Choice | null, { timeout, speedTest, firewall, random, docker }: PickerOptions): Promise<Choice | null | "update"> {
+export function pick(saved: Choice | null, { timeout, speedTest, firewall, random, allPorts, docker }: PickerOptions): Promise<Choice | null | "update"> {
   const selected = new Set(saved?.countries ?? []);
   const protos = new Set(saved?.protocols.length ? saved.protocols : PROTOCOLS);
   let cursor = 0, top = 0, message = "", query = "", searching = false;
   let seconds = String(timeout), editing = false; // the timeout, as typed
   let dockerAt: DockerState | null = null, inDialog = false; // docker's state once checked; a docker dialog has the screen
+  let portLists: ReadonlyMap<string, number[]> | null = null; // each protocol's ports, once the app said
   let hit: Hits;
   const visible = () => {
     const q = query.toLowerCase();
     return q ? COUNTRIES.filter((c) => c.toLowerCase().includes(q) || countryName(c).toLowerCase().includes(q)) : COUNTRIES;
   };
-  const attempts = () => selected.size * protos.size;
+  const ports = (p: string) => (allPorts && portLists?.get(p)?.length) || 1; // attempts per country for the protocol
+  const perCountry = (ps: Iterable<string>) => [...ps].reduce((n, p) => n + ports(p), 0);
+  const attempts = () => selected.size * perCountry(protos);
   const wireguard = loadDockerWireGuard(); // in docker containers, as the last parallel scan found
   enterScreen();
 
@@ -70,6 +75,12 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
 
       const protoLine = PROTOCOLS.map((p, i) =>
         `${dim(under(String(i + 1)))} ${protos.has(p) ? green("● " + p) : dim("○ " + p)}`).join("   ");
+      const listed = portLists && [...portLists.values()].some((l) => l.length), each = perCountry(protos);
+      const portsLine = `${dim(under("p"))} ${allPorts ? green("● all ports") : dim("○ all ports")}  ${dim(!allPorts
+        ? "off: each protocol on its default port"
+        : !portLists ? "checking the ports…"
+        : !listed ? "this Windscribe app can't list its ports: 2.22 and newer can"
+        : `every port of each protocol: ${each} attempt${each === 1 ? "" : "s"} per country${each > protos.size ? `, not ${protos.size}` : ""}`)}`;
       const speedLine = `${dim(under("s"))} ${speedTest ? green("● speed test") : dim("○ speed test")}  ${dim(speedTest
         ? "ranks by download speed · adds ~15s per working connection"
         : "off: connect-only, ranks by latency")}`;
@@ -85,7 +96,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       const timeoutLine = `${dim(under("t"))} timeout ${editing ? bold(seconds) + cyan("▏") : (short ? yellow : bold)(seconds || "?")} s  ${dim(`per connection · at least ${MIN_TIMEOUT}`)}`;
       const n = attempts();
       const here = PROTOCOLS.filter((p) => docker && protos.has(p) && notInContainers(PROTOCOLS, wireguard).has(p)); // after the containers
-      const inContainers = selected.size * (protos.size - here.length);
+      const inContainers = selected.size * perCountry([...protos].filter((p) => !here.includes(p)));
       const parallel = docker && dockerAt === "ready" && inContainers > 0;
       const slots = parallel ? workerCount(inContainers) : 1;
       const login = parallel ? loginSeconds(slots) : 0; // the containers log in before the scan starts
@@ -115,9 +126,9 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       const buttonLine = buttons.map(([id, label]) => (id === "start" ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
-        { caption: search, captionRight: dim(range), minWidth: Math.max(...[protoLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine].map(vw)) + 4 });
+        { caption: search, captionRight: dim(range), minWidth: Math.max(...[protoLine, portsLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine].map(vw)) + 4 });
       const width = vw(table[0]);
-      const head = box([protoLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine], {
+      const head = box([protoLine, portsLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine], {
         title: bold(cyan("WindScout")),
         right: `${bold(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
@@ -137,7 +148,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
           ? "type to filter · ↑↓ move · enter/esc done"
           // both lines fit 80 columns
           : `↑↓ move · space select · a/n ${query ? "all/none shown · esc clear" : "all/none · / search"} · enter start · q quit`), width),
-        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · r random · t timeout · d docker`), width),
+        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · p ports · s speed · f firewall · r random · t timeout · d docker`), width),
       ];
       if (message) lines.push(centerIn(yellow(message), width));
       lines.push("", ...version.map((l) => centerIn(l, width)), centerIn(dim(repoLink), width));
@@ -159,7 +170,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         return range;
       });
       hit = {
-        protoRow: at.top + 1, protoHits, speedRow: at.top + 2, firewallRow: at.top + 3, randomRow: at.top + 4, timeoutRow: at.top + 5, dockerRow: at.top + 6,
+        protoRow: at.top + 1, protoHits, portsRow: at.top + 2, speedRow: at.top + 3, firewallRow: at.top + 4, randomRow: at.top + 5,
+        timeoutRow: at.top + 6, dockerRow: at.top + 7,
         searchRow: at.top + head.length + 1,
         firstRow: at.top + head.length + 5, shown: shown.length,
         buttonRow: at.top + head.length + table.length + 1, buttonHits,
@@ -169,6 +181,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
     let closed = false;
     checkUpdate().then(() => !closed && render()); // the check usually lands after the first draw
     if (docker) dockerState().then((s) => ((dockerAt = s), !closed && render()));
+    protocolPorts().then((l) => ((portLists = l), !closed && render()));
     const finish = (value: Choice | null | "update") => {
       closed = true;
       out.off("resize", render);
@@ -194,6 +207,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         speed: speedTest,
         firewall,
         random,
+        allPorts,
         timeout,
         docker,
       };
@@ -238,7 +252,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         } else if (y === hit.protoRow) {
           const i = hit.protoHits.findIndex(([a, b]) => x >= a && x < b);
           if (i >= 0) flip(protos, PROTOCOLS[i]);
-        } else if (y === hit.speedRow) speedTest = !speedTest;
+        } else if (y === hit.portsRow) allPorts = !allPorts;
+        else if (y === hit.speedRow) speedTest = !speedTest;
         else if (y === hit.firewallRow) firewall = !firewall;
         else if (y === hit.randomRow) random = !random;
         else if (y === hit.dockerRow) return void toggleDocker();
@@ -289,6 +304,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       else if (k === "space") toggle();
       else if (k === "a") matches.forEach((c) => selected.add(c));
       else if (k === "n") matches.forEach((c) => selected.delete(c));
+      else if (k === "p") allPorts = !allPorts;
       else if (k === "s") speedTest = !speedTest;
       else if (k === "f") firewall = !firewall;
       else if (k === "r") random = !random;

@@ -16,3 +16,10 @@ test("one container per attempt, and past the most, the fewest that need no more
     }
   }
 });
+
+test("IKEv2, and WireGuard where the containers can't run it, stay on this computer, with or without a port", async () => {
+  const { notInContainers } = await import("../dist/docker.js");
+  const protocols = ["wireguard", "wireguard:53", "ikev2:500", "stealth:443", "wireguardx"];
+  assert.deepEqual([...notInContainers(protocols, true)], ["ikev2:500"]);
+  assert.deepEqual([...notInContainers(protocols, false)], ["wireguard", "wireguard:53", "ikev2:500"]);
+});

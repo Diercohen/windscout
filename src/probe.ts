@@ -3,7 +3,7 @@ import { latencyMs, speedMbps } from "./measure.js";
 import { now, sleep } from "./time.js";
 import { connectState, windscribe } from "./windscribe.js";
 
-export type Status = "ok" | "timeout" | "failed" | "key limit" | "no such location" | "no internet" | "interrupted";
+export type Status = "ok" | "timeout" | "failed" | "key limit" | "no such port" | "no such location" | "no internet" | "interrupted";
 
 export interface Result {
   query: string; // what was asked for: a country code, city or nickname
@@ -51,6 +51,9 @@ export async function probe(query: string, protocol: string,
       onStep(`connecting ${r.location}`.trim());
       await sleep(1000);
     }
+    // a port the app doesn't offer for the protocol: it connects on the protocol's default instead, so this port wasn't tried
+    const port = protocol.split(":")[1], shown = (await windscribe("status")).match(/^Protocol: .*:(\d+)\s*$/m)?.[1];
+    if (port && shown && shown !== port) return end("no such port");
     await measure(async () => {
       onStep(`measuring latency · ${r.location}`);
       r.latencyMs = await latencyMs();

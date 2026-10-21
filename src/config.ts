@@ -16,6 +16,7 @@ export interface Choice {
   speed: boolean; // speed test on
   firewall: boolean; // block internet while scanning
   random: boolean; // scan the countries in a shuffled order
+  allPorts: boolean; // each protocol on every port it has, not just its default
   timeout: number; // seconds to wait for each connection
   docker: boolean; // parallel scan in docker containers
 }
@@ -30,6 +31,7 @@ export function loadConfig(): Choice | null {
       speed: c.speed !== false,
       firewall: c.firewall === true,
       random: c.random === true,
+      allPorts: c.allPorts === true,
       timeout: c.timeout >= MIN_TIMEOUT ? c.timeout : DEFAULT_TIMEOUT,
       docker: c.docker === true,
     };

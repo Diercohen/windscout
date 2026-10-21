@@ -57,7 +57,7 @@ export function report(results: Result[], protocols: readonly string[], { all, s
   console.log(main.join("\n"));
 
   const stats = protocols.map((p) => {
-    const tried = results.filter((r) => r.protocol === p && r.status !== "no such location" && r.status !== "key limit");
+    const tried = results.filter((r) => r.protocol === p && !["no such location", "key limit", "no such port"].includes(r.status));
     const good = tried.filter((r) => r.status === "ok");
     return { p, good: good.length, tried: tried.length, best: sortOk(good).at(0) };
   }).sort((x, y) => y.good - x.good || (y.best?.speedMbps ?? 0) - (x.best?.speedMbps ?? 0) || (x.best?.latencyMs ?? 1e9) - (y.best?.latencyMs ?? 1e9));

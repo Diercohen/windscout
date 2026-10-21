@@ -18,7 +18,7 @@ const resultRow = (r: Result, i: number) => [
   r.connectS === null ? "-" : `${fmt(r.connectS, 1)} s`,
   r.latencyMs === null ? "-" : `${fmt(r.latencyMs, 0)} ms`,
   r.speedMbps === null ? "-" : bold(`${fmt(r.speedMbps, 1)} Mbps`),
-  r.status === "ok" ? green("✓ ok") : r.status === "key limit" ? yellow(r.status) : red(r.status),
+  r.status === "ok" ? green("✓ ok") : r.status === "key limit" || r.status === "no such port" ? yellow(r.status) : red(r.status),
 ];
 
 /** Numbered attempts, in the given order; the Speed column only when the speed test ran */
@@ -27,8 +27,21 @@ export function resultTable(results: Result[], speedTest: boolean, options: Grid
   return grid(RESULT_COLS.filter(keep), results.map((r, i) => resultRow(r, i).filter(keep)), options);
 }
 
-/** One row per country, ✓/✗ per protocol (· = not tried yet, key limit = couldn't try WireGuard); no lines until something was tried */
+const base = (protocol: string) => protocol.split(":")[0];
+
+/** A protocol's cell: ✓/✗, with how many of its ports worked when it has several (✓ 3/11); · = not tried yet,
+ * key limit = couldn't try WireGuard, no port = the app doesn't offer it. Those last two don't count */
+function cell(rs: Result[], ports: string[]): string {
+  const tried = rs.filter((r) => ports.includes(r.protocol));
+  const real = tried.filter((r) => r.status !== "key limit" && r.status !== "no such port");
+  const good = real.filter((r) => r.status === "ok").length, count = ports.length > 1 ? ` ${good}/${real.length}` : "";
+  if (real.length) return good ? green(`✓${count}`) : red(`✗${count}`);
+  return tried.some((r) => r.status === "key limit") ? yellow("key limit") : tried.length ? yellow("no port") : dim("·");
+}
+
+/** One row per country, a cell per protocol (its ports share it); no lines until something was tried */
 export function matrix(results: Result[], protocols: readonly string[], { minWidth = 0, limit = Infinity } = {}): string[] {
+  const columns = [...new Set(protocols.map(base))].map((b) => protocols.filter((p) => base(p) === b));
   const byCountry = new Map<string, Result[]>();
   for (const r of results) {
     if (r.status === "no such location" || r.status === "interrupted") continue;
@@ -48,16 +61,14 @@ export function matrix(results: Result[], protocols: readonly string[], { minWid
       [
         `${flag(q)} ${countryName(q)}`,
         first,
-        ...protocols.map((p) => {
-          const r = rs.find((x) => x.protocol === p);
-          return !r ? dim("·") : r.status === "ok" ? green("✓") : r.status === "key limit" ? yellow("key limit") : red("✗");
-        }),
+        ...columns.map((ports) => cell(rs, ports)),
       ],
-      ...more.map((place) => ["", place, ...protocols.map(() => "")]),
+      ...more.map((place) => ["", place, ...columns.map(() => "")]),
     ];
   }).slice(0, limit);
   return grid(
-    [{ title: "Country" }, { title: "Location(s)" }, ...protocols.map((p): Column => ({ title: p, align: "center" }))],
+    [{ title: "Country" }, { title: "Location(s)" },
+      ...columns.map((ports): Column => ({ title: ports.length > 1 ? base(ports[0]) : ports[0], align: "center" }))],
     rows,
     {
       caption: bold("Availability"),

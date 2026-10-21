@@ -31,3 +31,10 @@ test("values are read from [General] only, and a file without one gets one", () 
   assert.equal(iniValue("[engine]\nuserId=a\n", "userId"), undefined);
   assert.equal(withSession("[engine]\nfoo=1\n", { ...SESSION, userId: "" }), `[General]\nauthHash=${SESSION.authHash}\n[engine]\nfoo=1\n`);
 });
+
+test("all ports: each protocol without a port goes on every port the app lists, the rest stay as given", async () => {
+  const { withPorts } = await import("../dist/windscribe.js");
+  const lists = new Map([["tcp", [443, 587]], ["wstunnel", [443]], ["ikev2", []]]);
+  assert.deepEqual(withPorts(["tcp", "stealth:8443", "wstunnel", "ikev2", "stealth"], lists),
+    ["tcp:443", "tcp:587", "stealth:8443", "wstunnel:443", "ikev2", "stealth"]);
+});

@@ -17,7 +17,7 @@ import { leaveScreen, out } from "./tui/terminal.js";
 import { cyan, green, yellow } from "./tui/text.js";
 import { now, sleep } from "./time.js";
 import { canUpdate, checkUpdate, runUpdate, updateNotice, versionLines } from "./update.js";
-import { blockInternet, CLI, connectState, isFirewallOn, PROTOCOLS, restoreFirewall, waitForLogin, windscribe } from "./windscribe.js";
+import { blockInternet, CLI, connectState, isFirewallOn, protocolPorts, PROTOCOLS, restoreFirewall, waitForLogin, windscribe, withPorts } from "./windscribe.js";
 import { worker } from "./worker.js";
 
 const HELP = `Usage: windscout [options]
@@ -28,6 +28,7 @@ Without -c it opens an interactive country picker (your selection is remembered)
 Options:
   -c, --countries LIST  comma-separated ISO codes, city names or nicknames (skips the picker)
   -p, --protocols LIST  comma-separated protocols, optional :port (default: ${PROTOCOLS.join(",")})
+  -P, --all-ports       try each protocol on every port Windscribe offers for it, not just its default
   -t, --timeout SEC     seconds to wait for each connection, at least ${MIN_TIMEOUT} (default: saved, or ${DEFAULT_TIMEOUT})
   -a, --all             also show failed attempts in the final table
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
@@ -38,7 +39,8 @@ Options:
   -h, --help            show this help
 
 Selection is stored in ${CONFIG}
-Example: windscout -c DE,NL,TR -p stealth,tcp:443`;
+Examples: windscout -c DE,NL,TR -p stealth,tcp:443
+          windscout -c DE -p stealth,tcp -P`;
 
 // "DE, NL,,TR" → ["DE", "NL", "TR"]
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -87,6 +89,7 @@ async function main(): Promise<void> {
     options: {
       countries: { type: "string", short: "c" },
       protocols: { type: "string", short: "p" },
+      "all-ports": { type: "boolean", short: "P", default: false },
       timeout: { type: "string", short: "t" },
       all: { type: "boolean", short: "a", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -121,6 +124,7 @@ async function main(): Promise<void> {
   let speedTest = !a["no-speed"];
   let firewall = a.firewall;
   let random = a.random;
+  let allPorts = a["all-ports"];
   let docker = a.docker;
   if (!countries) {
     if (!tty) throw new Error("no terminal for the picker: pass countries with -c");
@@ -132,6 +136,7 @@ async function main(): Promise<void> {
       // already on in the app: show it on, since the scan won't turn it off
       firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
       random: random || (saved?.random ?? false),
+      allPorts: allPorts || (saved?.allPorts ?? false),
       docker: docker || (saved?.docker ?? false),
     });
     if (!choice) return;
@@ -141,11 +146,17 @@ async function main(): Promise<void> {
     speedTest = choice.speed;
     firewall = choice.firewall;
     random = choice.random;
+    allPorts = choice.allPorts;
     timeout = choice.timeout;
     docker = choice.docker;
   }
   protocols ??= PROTOCOLS;
   timeout ??= DEFAULT_TIMEOUT;
+  // the picker asked for the ports already: waiting for that keeps windscribe-cli free for the scan
+  if (allPorts || !a.countries) {
+    const lists = await protocolPorts();
+    if (allPorts) protocols = withPorts(protocols, lists);
+  }
   if (random) countries = countries.map((c) => [Math.random(), c] as const).sort(([x], [y]) => x - y).map(([, c]) => c);
 
   let probers = [probe], after: After | undefined; // after: what runs here once the containers are done

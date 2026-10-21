@@ -51,6 +51,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `/` | search by country name or code (enter/esc to finish, esc again to clear) |
 | `a` / `n` | select all / unselect all (only the matching countries while a search is active) |
 | `1`–`6` | toggle a protocol (`1`–`5` on Linux, which has no IKEv2) |
+| `p` | toggle [all ports](#all-ports): each protocol on every port it has, not just its default |
 | `s` | toggle the speed test (off = connect-only mode) |
 | `f` | toggle "block internet while scanning" (firewall) |
 | `r` | toggle random order: scan the selected countries shuffled, a new order each run |
@@ -72,6 +73,7 @@ Pass `-c` to skip the picker, for scripts or when there is no terminal:
 ```sh
 windscout -c DE,NL,TR -p stealth,tcp:443    # chosen countries and protocols (port optional)
 windscout -c Frankfurt,Wurstchen            # cities or datacenter nicknames work too
+windscout -c DE -p stealth,tcp -P           # every port of stealth and tcp
 windscout -t 40 -a                          # longer connect timeout, also list failed attempts
 ```
 
@@ -79,6 +81,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 |---|---|---|
 | `-c, --countries` | comma-separated ISO country codes, city names or nicknames | open the picker |
 | `-p, --protocols` | comma-separated: `wireguard`, `ikev2` (macOS and Windows), `stealth`, `wstunnel`, `udp`, `tcp`, optionally `:port` | saved, or all |
+| `-P, --all-ports` | try each protocol on [every port](#all-ports) Windscribe offers for it, not just its default | picker: saved, or off; with `-c`: off |
 | `-t, --timeout` | seconds to wait for each connection, at least 10 | picker: saved, or 15; with `-c`: 15 |
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
@@ -91,7 +94,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 
 Often you only need to know **what connects**, not how fast it is. Turn the speed test off with `s` in the picker or with `--no-speed`. Each working connection is then checked with a quick latency test only. That saves about 15 s per working connection, and results are ranked by latency. Connect-only is the default on the first run, and the choice is remembered.
 
-Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet; `key limit`, in a [parallel scan](#parallel-scan-with-docker): WireGuard couldn't be tried). Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
+Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet; `key limit`, in a [parallel scan](#parallel-scan-with-docker): WireGuard couldn't be tried). With [all ports](#all-ports), it counts how many of a protocol's ports worked: `✓ 3/11`. Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -107,6 +110,24 @@ Both modes show an **availability grid**: one row per country, and ✓ / ✗ for
 ```
 
 While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. Press `p` (or `space`) to pause: the current attempt finishes, the VPN disconnects, and the scan waits until you press `p` again. Paused time doesn't count toward elapsed or remaining. In connect-only mode the scan starts on the availability grid.
+
+## All ports
+
+Each protocol is normally tried on its default port, the first one Windscribe lists for it. A network can block a protocol on one port and let it through on another, so turn on **all ports** with `p` in the picker or `-P` (`--all-ports`): each selected protocol is then tried on every port Windscribe offers for it. WindScout asks your Windscribe app for the ports (`windscribe-cli ports tcp`), so the list follows Windscribe's. In October 2026 it was:
+
+| Protocol | Ports | Attempts per country |
+|---|---|---|
+| wireguard | 443, 80, 53, 123, 1194, 65142 | 6 |
+| stealth | 443, 587, 21, 22, 80, 123, 143, 3306, 8080, 54783, 8443 | 11 |
+| wstunnel | 443 | 1 |
+| udp | 443, 80, 53, 123, 1194, 54783 | 6 |
+| tcp | 443, 587, 21, 22, 80, 123, 143, 3306, 8080, 54783, 1194 | 11 |
+
+With every protocol selected, that's 35 attempts per country instead of 5, 7 times as many (on macOS and Windows, IKEv2 adds its own ports). The picker shows the count (`35 attempts per country, not 5`) and the estimate: one country takes about 11m 40s instead of 1m 40s in a normal scan, and about 2 minutes in a [parallel scan](#parallel-scan-with-docker), which helps most here. With the speed test on, every working port gets a speed test too, about 15 s each, so connect-only mode finds the working ports sooner. To try fewer, select only the protocols you need, or give a port yourself: a protocol with a port (`-p tcp:443`) stays on that one.
+
+The availability grid keeps one column per protocol and counts how many of its ports worked (`✓ 3/11`, or `✗ 0/11` when none did). The results list each working protocol with its port, and the per-protocol table has a line per port.
+
+When the app making an attempt doesn't offer a port, Windscribe quietly connects on the protocol's default port instead. That can happen in a parallel scan, where each container runs its own copy of the app, which can be older or newer than yours. WindScout checks the port it actually connected on and shows those attempts as `no port` (in yellow), rather than as results for a port that wasn't tried. Listing ports needs Windscribe 2.22 or newer. With an older app, all ports changes nothing, and the picker says so.
 
 ## Block internet while scanning (firewall)
 

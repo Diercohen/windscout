@@ -26,3 +26,22 @@ test("WireGuard attempts at the key limit show as such, don't count as tried, an
   assert.ok(out.includes('windscout -c "DE,NL" -p wireguard'));
   assert.match(out, /wireguard\s*│\s*0\/0/); // per protocol: none tried
 });
+
+test("all ports: a protocol's ports share its column, which counts the ports that worked of those really tried", async () => {
+  const { matrix } = await import("../dist/tui/tables.js");
+  const rows = matrix([
+    result("DE", "tcp:443", "ok", { location: "Frankfurt - Castle" }),
+    result("DE", "tcp:80", "timeout"),
+    result("DE", "tcp:8443", "no such port"),
+    result("DE", "stealth", "failed"),
+    result("NL", "tcp:443", "failed"),
+    result("NL", "tcp:80", "failed"),
+    result("NL", "stealth", "ok", { location: "Amsterdam - Tulip" }),
+  ], ["tcp:443", "tcp:80", "tcp:8443", "stealth"]).join("\n");
+  assert.match(rows, /│\s+tcp\s+│\s+stealth\s+│/); // one column for tcp's three ports
+  assert.match(rows, /Germany.*✓ 1\/2.*✗/);
+  assert.match(rows, /Netherlands.*✗ 0\/2.*✓/);
+  const one = matrix([result("DE", "tcp:9999", "no such port")], ["tcp:9999"]).join("\n");
+  assert.match(one, /│ tcp:9999 │/); // a single port keeps its name
+  assert.match(one, /Germany.*no port/);
+});
