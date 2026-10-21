@@ -1,11 +1,13 @@
-// Screen 1: pick countries, protocols, speed test, firewall, random order and timeout, by keyboard or mouse.
+// Screen 1: pick countries, protocols, speed test, firewall, random order, timeout and docker, by keyboard or mouse.
 import type { Key } from "node:readline";
-import { MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
+import { loadDockerWireGuard, MIN_TIMEOUT, saveConfig, type Choice } from "../config.js";
+import { dockerState, notInContainers, workerCount, type DockerState } from "../docker.js";
 import { attemptSeconds, estimate } from "../scan.js";
 import { duration } from "../time.js";
 import { canUpdate, checkUpdate, versionLines } from "../update.js";
 import { COUNTRIES, PROTOCOLS } from "../windscribe.js";
 import { countryName, flag } from "./country.js";
+import { setupDocker } from "./docker.js";
 import { draw, enterScreen, input, leaveScreen, out, repoLink, type Mouse } from "./terminal.js";
 import { bold, cyan, dim, green, under, vw, yellow } from "./text.js";
 import { box, centerIn, grid } from "./widgets.js";
@@ -15,6 +17,7 @@ export interface PickerOptions {
   speedTest: boolean;
   firewall: boolean;
   random: boolean;
+  docker: boolean;
 }
 
 type Button = "start" | "all" | "none" | "quit";
@@ -27,6 +30,7 @@ interface Hits {
   firewallRow: number;
   randomRow: number;
   timeoutRow: number;
+  dockerRow: number;
   searchRow: number;
   firstRow: number; // first country row
   shown: number; // country rows on screen
@@ -37,24 +41,28 @@ interface Hits {
 const flip = <T>(set: Set<T>, value: T) => (set.has(value) ? set.delete(value) : set.add(value));
 
 /** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
-export function pick(saved: Choice | null, { timeout, speedTest, firewall, random }: PickerOptions): Promise<Choice | null | "update"> {
+export function pick(saved: Choice | null, { timeout, speedTest, firewall, random, docker }: PickerOptions): Promise<Choice | null | "update"> {
   const selected = new Set(saved?.countries ?? []);
   const protos = new Set(saved?.protocols.length ? saved.protocols : PROTOCOLS);
   let cursor = 0, top = 0, message = "", query = "", searching = false;
   let seconds = String(timeout), editing = false; // the timeout, as typed
+  let dockerAt: DockerState | null = null, inDialog = false; // docker's state once checked; a docker dialog has the screen
   let hit: Hits;
   const visible = () => {
     const q = query.toLowerCase();
     return q ? COUNTRIES.filter((c) => c.toLowerCase().includes(q) || countryName(c).toLowerCase().includes(q)) : COUNTRIES;
   };
+  const attempts = () => selected.size * protos.size;
+  const wireguard = loadDockerWireGuard(); // in docker containers, as the last parallel scan found
   enterScreen();
 
   return new Promise((resolve) => {
     const render = () => {
+      if (inDialog) return;
       const rows = out.rows || 24;
       const version = versionLines(true);
       const matches = visible();
-      const height = Math.max(3, rows - 22 - version.length);
+      const height = Math.max(3, rows - 23 - version.length);
       cursor = Math.max(0, Math.min(cursor, matches.length - 1));
       if (cursor < top) top = cursor;
       if (cursor >= top + height) top = cursor - height + 1;
@@ -66,15 +74,24 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         ? "ranks by download speed · adds ~15s per working connection"
         : "off: connect-only, ranks by latency")}`;
       const fwLabel = "block internet while scanning (firewall)";
-      const fwLine = `${dim(under("f"))} ${firewall ? green("● " + fwLabel) : dim("○ " + fwLabel)}  ${dim(firewall
-        ? "only VPN traffic gets through"
-        : "off: apps may leak in between")}`;
+      const fwLine = `${dim(under("f"))} ${firewall ? green("● " + fwLabel) : dim("○ " + fwLabel)}  ${dim(docker
+        ? "not used with docker"
+        : firewall ? "only VPN traffic gets through" : "off: apps may leak in between")}`;
       const randomLine = `${dim(under("r"))} ${random ? green("● random order") : dim("○ random order")}  ${dim(random
         ? "scans the countries shuffled, a new order each run"
         : "off: scans in list order")}`;
       timeout = Number(seconds);
       const short = timeout < MIN_TIMEOUT;
       const timeoutLine = `${dim(under("t"))} timeout ${editing ? bold(seconds) + cyan("▏") : (short ? yellow : bold)(seconds || "?")} s  ${dim(`per connection · at least ${MIN_TIMEOUT}`)}`;
+      const n = attempts();
+      const here = PROTOCOLS.filter((p) => docker && protos.has(p) && notInContainers(PROTOCOLS, wireguard).has(p)); // after the containers
+      const inContainers = selected.size * (protos.size - here.length);
+      const slots = docker && dockerAt === "ready" && inContainers ? workerCount(inContainers) : 1;
+      const dockerLabel = "parallel scan in docker containers";
+      const dockerLine = `${dim(under("d"))} ${docker ? green("● " + dockerLabel) : dim("○ " + dockerLabel)}  ${dim(!docker
+        ? "off: one attempt at a time"
+        : dockerAt === "ready" ? `${slots} at a time${here.length ? ` · ${here.join(" and ")} here, after them` : ""}`
+        : dockerAt ? "docker isn't ready: start sets it up" : "checking docker…")}`;
       const search = searching
         ? `${cyan("🔍")} ${bold(query)}${cyan("▏")}`
         : query ? `🔍 ${query}` : dim("🔍 press / to search");
@@ -96,14 +113,13 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       const buttonLine = buttons.map(([id, label]) => (id === "start" ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
-        { caption: search, captionRight: dim(range), minWidth: Math.max(vw(protoLine), vw(speedLine), vw(fwLine), vw(randomLine), vw(timeoutLine)) + 4 });
+        { caption: search, captionRight: dim(range), minWidth: Math.max(...[protoLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine].map(vw)) + 4 });
       const width = vw(table[0]);
-      const head = box([protoLine, speedLine, fwLine, randomLine, timeoutLine], {
+      const head = box([protoLine, speedLine, fwLine, randomLine, timeoutLine, dockerLine], {
         title: bold(cyan("WindScout")),
         right: `${bold(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
       });
-      const n = selected.size * protos.size;
       const lines = [
         ...head,
         ...table,
@@ -111,14 +127,15 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         centerIn(buttonLine, width),
         "",
         centerIn(n
-          ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(estimate(selected.size, protos.size, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each)`)}`
+          ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(estimate(inContainers, timeout, slots) + estimate(n - inContainers, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each${slots > 1 ? `, ${slots} at a time` : ""})`)}`
           : yellow("select at least one country and one protocol"), width),
         centerIn(dim(editing
           ? "type the seconds to wait for each connection · enter/esc done"
           : searching
           ? "type to filter · ↑↓ move · enter/esc done"
-          : `↑↓ move · space select · a/n ${query ? "all/none shown" : "all/none"} · / search`), width),
-        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · r random · t timeout · enter start · ${query ? "esc clear · " : ""}q quit`), width),
+          // both lines fit 80 columns
+          : `↑↓ move · space select · a/n ${query ? "all/none shown · esc clear" : "all/none · / search"} · enter start · q quit`), width),
+        centerIn(dim(searching || editing ? "" : `1-${PROTOCOLS.length} protocols · s speed test · f firewall · r random · t timeout · d docker`), width),
       ];
       if (message) lines.push(centerIn(yellow(message), width));
       lines.push("", ...version.map((l) => centerIn(l, width)), centerIn(dim(repoLink), width));
@@ -140,7 +157,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         return range;
       });
       hit = {
-        protoRow: at.top + 1, protoHits, speedRow: at.top + 2, firewallRow: at.top + 3, randomRow: at.top + 4, timeoutRow: at.top + 5,
+        protoRow: at.top + 1, protoHits, speedRow: at.top + 2, firewallRow: at.top + 3, randomRow: at.top + 4, timeoutRow: at.top + 5, dockerRow: at.top + 6,
         searchRow: at.top + head.length + 1,
         firstRow: at.top + head.length + 5, shown: shown.length,
         buttonRow: at.top + head.length + table.length + 1, buttonHits,
@@ -149,6 +166,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
 
     let closed = false;
     checkUpdate().then(() => !closed && render()); // the check usually lands after the first draw
+    if (docker) dockerState().then((s) => ((dockerAt = s), !closed && render()));
     const finish = (value: Choice | null | "update") => {
       closed = true;
       out.off("resize", render);
@@ -159,7 +177,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
     };
 
     const start = (): boolean => {
-      if (!selected.size || !protos.size) {
+      if (!attempts()) {
         message = "nothing to scan yet";
         return false;
       }
@@ -175,13 +193,31 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         firewall,
         random,
         timeout,
+        docker,
       };
       saveConfig(choice);
       finish(choice);
       return true;
     };
 
-    input.on("mouse", (m: Mouse) => {
+    // turning it on gets docker going first: installs or starts it (after asking), unless it answers already
+    const toggleDocker = async () => {
+      if (!docker && (dockerAt = await dockerState()) !== "ready") {
+        inDialog = true;
+        input.off("keypress", onKey);
+        input.off("mouse", onMouse);
+        const ok = await setupDocker();
+        input.on("keypress", onKey);
+        input.on("mouse", onMouse);
+        inDialog = false;
+        dockerAt = await dockerState();
+        if (!ok) return render();
+      }
+      docker = !docker;
+      render();
+    };
+
+    const onMouse = (m: Mouse) => {
       if (!m.press) return;
       message = "";
       const matches = visible();
@@ -203,6 +239,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         } else if (y === hit.speedRow) speedTest = !speedTest;
         else if (y === hit.firewallRow) firewall = !firewall;
         else if (y === hit.randomRow) random = !random;
+        else if (y === hit.dockerRow) return void toggleDocker();
         else if (y === hit.buttonRow) {
           const id = hit.buttonHits.find(([, a, b]) => x >= a && x < b)?.[0];
           if (id === "start" && start()) return;
@@ -212,10 +249,11 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         }
       }
       render();
-    });
+    };
+    input.on("mouse", onMouse);
 
     out.on("resize", render);
-    input.on("keypress", (str: string | undefined, key: Key = {}) => {
+    const onKey = (str: string | undefined, key: Key = {}) => {
       message = "";
       const k = key.name;
       const matches = visible();
@@ -253,6 +291,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       else if (k === "f") firewall = !firewall;
       else if (k === "r") random = !random;
       else if (k === "t") editing = true, seconds = "";
+      else if (k === "d") return void toggleDocker();
       else if (k === "u" && canUpdate()) return finish("update");
       else if (/^[1-9]$/.test(str ?? "") && PROTOCOLS[Number(str) - 1]) flip(protos, PROTOCOLS[Number(str) - 1]);
       else if (k === "escape" && query) query = "", cursor = 0;
@@ -260,7 +299,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         if (start()) return;
       } else if (k === "q" || k === "escape") return finish(null);
       render();
-    });
+    };
+    input.on("keypress", onKey);
     render();
   });
 }

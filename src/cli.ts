@@ -5,9 +5,11 @@
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { CONFIG, DEFAULT_TIMEOUT, loadConfig, MIN_TIMEOUT } from "./config.js";
-import type { Result } from "./probe.js";
-import { Scan } from "./scan.js";
+import { CONFIG, DEFAULT_TIMEOUT, loadConfig, loadDockerWireGuard, MIN_TIMEOUT, saveDockerWireGuard } from "./config.js";
+import { notInContainers, stopWorkers } from "./docker.js";
+import { probe, type Result } from "./probe.js";
+import { Scan, type After } from "./scan.js";
+import { startParallel } from "./tui/docker.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
 import { command, report, target } from "./tui/report.js";
@@ -16,6 +18,7 @@ import { cyan, green, yellow } from "./tui/text.js";
 import { now, sleep } from "./time.js";
 import { canUpdate, checkUpdate, runUpdate, updateNotice, versionLines } from "./update.js";
 import { blockInternet, CLI, connectState, isFirewallOn, PROTOCOLS, restoreFirewall, waitForLogin, windscribe } from "./windscribe.js";
+import { worker } from "./worker.js";
 
 const HELP = `Usage: windscout [options]
 
@@ -30,6 +33,7 @@ Options:
   -n, --no-speed        connect-only: skip the download test, rank by latency (faster scan)
   -f, --firewall        block internet while scanning, except through the VPN (turned back off afterwards)
   -r, --random          scan the countries in a random order
+  -d, --docker          scan in parallel, in docker containers (as many as docker's CPUs and memory allow, up to 8)
   -v, --version         show the installed version (and offer to update if a newer one is out)
   -h, --help            show this help
 
@@ -39,20 +43,20 @@ Example: windscout -c DE,NL,TR -p stealth,tcp:443`;
 // "DE, NL,,TR" → ["DE", "NL", "TR"]
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
-const ask = (question: string) => new Promise<string>((resolve) => {
+const ask = (question: string) => new Promise<string | null>((resolve) => {
   const rl = createInterface({ input: process.stdin, output: out });
-  rl.on("SIGINT", () => rl.close()); // Ctrl-C / Ctrl-D: same as enter
-  rl.on("close", () => resolve(""));
+  rl.on("SIGINT", () => rl.close()); // Ctrl-C / Ctrl-D: no answer, null
+  rl.on("close", () => resolve(null));
   rl.question(question, (a) => (resolve(a.trim()), rl.close()));
 });
 
-/** Asks which numbered connection to make, then runs its command and waits for it to connect */
+/** Asks which numbered connection to make (enter: the best), then runs its command and waits for it to connect */
 async function offerConnect(choices: Result[], timeout: number): Promise<void> {
-  const others = choices.length > 1 ? `, 1-${choices.length - 1} = other` : "";
+  const others = choices.length > 2 ? `, 1-${choices.length - 1} = other` : choices.length > 1 ? ", 1 = other" : "";
   for (;;) {
-    const a = await ask(`\nconnect to # (0 = best${others}, enter to quit): `);
-    if (!a) return;
-    const r = /^\d+$/.test(a) ? choices[Number(a)] : undefined;
+    const a = await ask(`\nconnect to # (enter or 0 = best${others}, q = quit): `);
+    if (a === null || /^q(uit)?$/i.test(a)) return;
+    const r = a === "" ? choices[0] : /^\d+$/.test(a) ? choices[Number(a)] : undefined;
     if (!r) {
       console.log(yellow(`no #${a} in the tables`));
       continue;
@@ -90,14 +94,20 @@ async function main(): Promise<void> {
       "no-speed": { type: "boolean", short: "n", default: false },
       firewall: { type: "boolean", short: "f", default: false },
       random: { type: "boolean", short: "r", default: false },
+      docker: { type: "boolean", short: "d", default: false },
+      worker: { type: "boolean", default: false }, // in a parallel scan's container
     },
   });
+  if (a.worker) {
+    await worker();
+    process.exit(); // its stdin may still be open: it has no login to scan with
+  }
   if (a.help) return console.log(HELP);
   checkUpdate(); // runs while the app starts and the user picks, before the VPN starts switching
   if (a.version) {
     await checkUpdate();
     console.log(versionLines().join("\n"));
-    if (canUpdate() && process.stdin.isTTY && out.isTTY && /^y(es)?$/i.test(await ask("update now? (y/n) "))) process.exitCode = runUpdate();
+    if (canUpdate() && process.stdin.isTTY && out.isTTY && /^y(es)?$/i.test((await ask("update now? (y/n) ")) ?? "")) process.exitCode = runUpdate();
     return;
   }
   let timeout = a.timeout ? Number(a.timeout) : undefined;
@@ -110,6 +120,7 @@ async function main(): Promise<void> {
   let speedTest = !a["no-speed"];
   let firewall = a.firewall;
   let random = a.random;
+  let docker = a.docker;
   if (!countries) {
     if (!tty) throw new Error("no terminal for the picker: pass countries with -c");
     const saved = loadConfig();
@@ -120,6 +131,7 @@ async function main(): Promise<void> {
       // already on in the app: show it on, since the scan won't turn it off
       firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
       random: random || (saved?.random ?? false),
+      docker: docker || (saved?.docker ?? false),
     });
     if (!choice) return;
     if (choice === "update") return updateAndRestart();
@@ -129,17 +141,32 @@ async function main(): Promise<void> {
     firewall = choice.firewall;
     random = choice.random;
     timeout = choice.timeout;
+    docker = choice.docker;
   }
   protocols ??= PROTOCOLS;
   timeout ??= DEFAULT_TIMEOUT;
   if (random) countries = countries.map((c) => [Math.random(), c] as const).sort(([x], [y]) => x - y).map(([, c]) => c);
 
-  const scan = new Scan(countries, protocols, { timeout, speedTest });
-  const blocking = firewall && (await blockInternet());
+  let probers = [probe], after: After | undefined; // after: what runs here once the containers are done
+  const later = notInContainers(protocols, loadDockerWireGuard()); // as far as the last parallel scan knows
+  const inContainers = countries.length * protocols.filter((p) => !later.has(p)).length;
+  if (docker && inContainers) {
+    const started = await startParallel(inContainers);
+    if (!started) return leaveScreen();
+    saveDockerWireGuard(started.wireguard);
+    probers = started.probers;
+    after = { prober: probe, protocols: notInContainers(protocols, started.wireguard), name: "this computer" };
+    await windscribe("disconnect"); // a VPN connection here would carry the containers' traffic too
+  }
+  const scan = new Scan(countries, protocols, { timeout, speedTest }, probers, after);
+  // not with containers: their traffic goes out through this computer, and the firewall would block it
+  const blocking = firewall && !after && (await blockInternet());
   const view = tty ? showProgress(scan, blocking) : logProgress(scan);
   await scan.run(view);
+  if (after) await stopWorkers();
   await restoreFirewall();
   view.close();
+  for (const e of new Set(scan.errors)) console.error(yellow(e));
   if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
   const choices = report(scan.results, protocols, { all: a.all, speedTest });
   await checkUpdate();

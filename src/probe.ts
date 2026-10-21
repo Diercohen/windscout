@@ -20,13 +20,15 @@ export interface ProbeOptions {
   speedTest: boolean; // also measure download speed
   stopped?: () => boolean; // polled while connecting; true gives up with "interrupted"
   onStep?: (text: string) => void; // what the probe is doing, for the live view
+  // runs the measurements; a parallel scan passes a lock: its containers share one connection and would skew each other
+  measure?: (fn: () => Promise<void>) => Promise<void>;
 }
 
 // "Connected: Miami - Vice" → "Miami - Vice"
 const place = (state: string) => state.split(":").slice(1).join(":").trim();
 
 export async function probe(query: string, protocol: string,
-  { timeout, speedTest, stopped = () => false, onStep = () => {} }: ProbeOptions): Promise<Result> {
+  { timeout, speedTest, stopped = () => false, onStep = () => {}, measure = (fn) => fn() }: ProbeOptions): Promise<Result> {
   const r: Omit<Result, "status"> = { query, protocol, location: "", connectS: null, latencyMs: null, speedMbps: null };
   const end = (status: Status): Result => ({ ...r, status });
   onStep("connecting");
@@ -47,14 +49,15 @@ export async function probe(query: string, protocol: string,
       onStep(`connecting ${r.location}`.trim());
       await sleep(1000);
     }
-    onStep(`measuring latency · ${r.location}`);
-    r.latencyMs = await latencyMs();
-    if (r.latencyMs === null) return end("no internet");
-    if (speedTest) {
-      onStep(`measuring speed · ${r.location}`);
-      r.speedMbps = await speedMbps();
-    }
-    return end("ok");
+    await measure(async () => {
+      onStep(`measuring latency · ${r.location}`);
+      r.latencyMs = await latencyMs();
+      if (r.latencyMs !== null && speedTest) {
+        onStep(`measuring speed · ${r.location}`);
+        r.speedMbps = await speedMbps();
+      }
+    });
+    return end(r.latencyMs === null ? "no internet" : "ok");
   } finally {
     onStep("disconnecting");
     await windscribe("disconnect");
