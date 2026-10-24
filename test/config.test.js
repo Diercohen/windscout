@@ -19,11 +19,11 @@ test("the username and password 0.6.0 saved are deleted, and nothing else", () =
   forgetLogin(); // none left: fine
 });
 
-test("the speed test is hidden: a saved \"on\" reads as off, and the rest of the choice stays", async () => {
+test("a saved speed-test choice is kept, and the rest of the choice stays", async () => {
   const { loadConfig } = await import("../dist/config.js");
   mkdirSync(dirname(CONFIG), { recursive: true });
   writeFileSync(CONFIG, JSON.stringify({ countries: ["DE"], protocols: ["tcp"], speed: true, random: true, timeout: 20 }));
   const c = loadConfig();
-  assert.equal(c.speed, false);
+  assert.equal(c.speed, true);
   assert.deepEqual([c.countries, c.protocols, c.random, c.timeout], [["DE"], ["tcp"], true, 20]);
 });

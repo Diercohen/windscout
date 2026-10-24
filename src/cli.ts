@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // WindScout: find which Windscribe locations and protocols actually work from here.
 // Drives the official windscribe-cli: connects to each country/protocol pair,
-// measures latency through the tunnel, prints a ranked table.
+// measures latency and download speed through the tunnel, prints a ranked table.
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
       all: { type: "boolean", short: "a", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
-      "no-speed": { type: "boolean", short: "n", default: false }, // still accepted while the speed test is hidden
+      "no-speed": { type: "boolean", short: "n", default: false },
       firewall: { type: "boolean", short: "f", default: false },
       random: { type: "boolean", short: "r", default: false },
       docker: { type: "boolean", short: "d", default: false },

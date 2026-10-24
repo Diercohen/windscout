@@ -1,5 +1,4 @@
-// Screen 1: pick countries, protocols, all ports, speed test (while not hidden), firewall, random order, timeout and docker,
-// by keyboard or mouse.
+// Screen 1: pick countries, protocols, all ports, speed test, firewall, random order, timeout and docker, by keyboard or mouse.
 import type { Key } from "node:readline";
 import { loadDockerWireGuard, MIN_TIMEOUT, saveConfig, SPEED_TEST, type Choice } from "../config.js";
 import { dockerState, loginSeconds, notInContainers, workerCount, type DockerState } from "../docker.js";

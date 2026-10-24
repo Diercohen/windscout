@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
-// The speed test is hidden: every scan is connect-only, and a saved "on" reads as off. Its code stays; true brings it back
-export const SPEED_TEST = false;
+// false hides the speed test: every scan is connect-only, and a saved "on" reads as off
+export const SPEED_TEST = true;
 
 export const DEFAULT_TIMEOUT = 15;
 export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that would have worked

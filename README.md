@@ -1,8 +1,8 @@
 # WindScout
 
-Find which Windscribe locations and protocols actually work from your network, ranked by latency. Runs on Linux, macOS and Windows.
+Find which Windscribe locations and protocols actually work from your network, ranked by speed. Runs on Linux, macOS and Windows.
 
-WindScout drives the official `windscribe-cli`: it connects to each country × protocol pair, measures latency through the tunnel, disconnects, and prints a ranked table.
+WindScout drives the official `windscribe-cli`: it connects to each country × protocol pair, measures latency and download speed through the tunnel, disconnects, and prints a ranked table.
 
 ![WindScout picking countries, scanning, and printing the availability grid and ranked results](demo.gif)
 
@@ -30,7 +30,7 @@ Run `windscout` with no arguments to open the interactive picker:
 ```
 ╭─ WindScout ──────────────────────────────────── 2/68 selected ─╮
 │ 1 ● wireguard   2 ● stealth   3 ○ wstunnel   4 ● udp   5 ● tcp │
-│ p ○ all ports  off: each protocol on its default port          │
+│ s ○ speed test  off: connect-only, ranks by latency            │
 ╰────────────────────────────────────────────────────────────────╯
 ╭────────────────────────────────────────────────────────────────╮
 │ 🔍 an▏                                              1–16 of 18 │
@@ -52,6 +52,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `a` / `n` | select all / unselect all (only the matching countries while a search is active) |
 | `1`–`6` | toggle a protocol (`1`–`5` on Linux, which has no IKEv2) |
 | `p` | toggle [all ports](#all-ports): each protocol on every port it has, not just its default |
+| `s` | toggle the speed test (off = connect-only mode) |
 | `f` | toggle "block internet while scanning" (firewall) |
 | `r` | toggle random order: scan the selected countries shuffled, a new order each run |
 | `d` | toggle the [parallel scan in docker containers](#parallel-scan-with-docker) (installs or starts docker first, after asking) |
@@ -59,11 +60,11 @@ Run `windscout` with no arguments to open the interactive picker:
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
 
-**Mouse:** click a country to select or unselect it, click a protocol or a setting's line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys; the shortcut key is underlined on screen (on the buttons, the protocol numbers and the settings' letters). This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
+**Mouse:** click a country to select or unselect it, click a protocol or the speed-test line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys; the shortcut key is underlined on screen (on the buttons, the protocol numbers and `s`). This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
 
 Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
-While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting or measuring latency). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter to connect to the best one, type another one's number to connect to that, or `q` to quit.
+While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter to connect to the best one, type another one's number to connect to that, or `q` to quit.
 
 ### Non-interactive
 
@@ -83,14 +84,17 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-P, --all-ports` | try each protocol on [every port](#all-ports) Windscribe offers for it, not just its default | picker: saved, or off; with `-c`: off |
 | `-t, --timeout` | seconds to wait for each connection, at least 10 | picker: saved, or 15; with `-c`: 15 |
 | `-a, --all` | include failed attempts in the final table | off |
+| `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
 | `-r, --random` | scan the countries in a random order | picker: saved, or off; with `-c`: off |
 | `-d, --docker` | [scan in parallel, in docker containers](#parallel-scan-with-docker) | picker: saved, or off; with `-c`: off |
 | `-v, --version` | print the installed version; if a newer one is on npm, show the update command (with `sudo` when needed) and ask (y/n) to run it | |
 
-## Availability grid
+## Connect-only mode
 
-Each working connection gets a quick latency test, and the working ones are ranked by latency. The scan screen and the final report show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet; `key limit`, in a [parallel scan](#parallel-scan-with-docker): WireGuard couldn't be tried). With [all ports](#all-ports), it counts how many of a protocol's ports worked: `✓ 3/11`. Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
+Often you only need to know **what connects**, not how fast it is. Turn the speed test off with `s` in the picker or with `--no-speed`. Each working connection is then checked with a quick latency test only. That saves about 15 s per working connection, and results are ranked by latency. Connect-only is the default on the first run, and the choice is remembered.
+
+Both modes show an **availability grid**: one row per country, and ✓ / ✗ for each protocol (`·` = not tried yet; `key limit`, in a [parallel scan](#parallel-scan-with-docker): WireGuard couldn't be tried). With [all ports](#all-ports), it counts how many of a protocol's ports worked: `✓ 3/11`. Location(s) lists each datacenter that connected, one per line, since protocols can land on different ones:
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -105,7 +109,7 @@ Each working connection gets a quick latency test, and the working ones are rank
 ╰─────────────────────────┴────────────────────────┴─────────┴───────────┴─────╯
 ```
 
-While scanning, press `tab` to switch between the availability grid and the latency ranking. Press `p` (or `space`) to pause: the current attempt finishes, the VPN disconnects, and the scan waits until you press `p` again. Paused time doesn't count toward elapsed or remaining. The scan starts on the availability grid.
+While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. Press `p` (or `space`) to pause: the current attempt finishes, the VPN disconnects, and the scan waits until you press `p` again. Paused time doesn't count toward elapsed or remaining. In connect-only mode the scan starts on the availability grid.
 
 ## All ports
 
@@ -119,7 +123,7 @@ Each protocol is normally tried on its default port, the first one Windscribe li
 | udp | 443, 80, 53, 123, 1194, 54783 | 6 |
 | tcp | 443, 587, 21, 22, 80, 123, 143, 3306, 8080, 54783, 1194 | 11 |
 
-With every protocol selected, that's 35 attempts per country instead of 5, 7 times as many (on macOS and Windows, IKEv2 adds its own ports). The picker shows the count (`35 attempts per country, not 5`) and the estimate: one country takes about 11m 40s instead of 1m 40s in a normal scan, and about 2 minutes in a [parallel scan](#parallel-scan-with-docker), which helps most here. To try fewer, select only the protocols you need, or give a port yourself: a protocol with a port (`-p tcp:443`) stays on that one.
+With every protocol selected, that's 35 attempts per country instead of 5, 7 times as many (on macOS and Windows, IKEv2 adds its own ports). The picker shows the count (`35 attempts per country, not 5`) and the estimate: one country takes about 11m 40s instead of 1m 40s in a normal scan, and about 2 minutes in a [parallel scan](#parallel-scan-with-docker), which helps most here. With the speed test on, every working port gets a speed test too, about 15 s each, so connect-only mode finds the working ports sooner. To try fewer, select only the protocols you need, or give a port yourself: a protocol with a port (`-p tcp:443`) stays on that one.
 
 The availability grid keeps one column per protocol and counts how many of its ports worked (`✓ 3/11`, or `✗ 0/11` when none did). The results list each working protocol with its port, and the per-protocol table has a line per port.
 
@@ -163,7 +167,7 @@ The mirrors come from [Mirava](https://github.com/MiravaOrg/Mirava)'s list of mi
 
 WindScout 0.6.0 asked for your username and password instead, and could save them in `~/.config/windscout/login.json`. WindScout now deletes that file.
 
-**Measuring:** the containers share your internet connection, so they take turns measuring latency while the connecting happens in parallel. Numbers stay comparable with a normal scan. Most of the time saved comes from attempts that hang until the timeout, which overlap now.
+**Measuring:** the containers share your internet connection, so they take turns measuring latency and speed while the connecting happens in parallel. Numbers stay comparable with a normal scan. Most of the time saved comes from attempts that hang until the timeout, which overlap now.
 
 **Differences from a normal scan:**
 
@@ -183,23 +187,23 @@ While scanning:
 │  ██████████████████████████████████████████▌░░░░░░░░░░░░░░░░   72%   │
 │                                                                      │
 │  ⠏ 🇳🇱 Netherlands · stealth                                          │
-│    measuring latency · Amsterdam - Tulip · 1s                        │
+│    measuring speed · Amsterdam - Tulip · 3s                          │
 ├──────────────────────────────────────────────────────────────────────┤
 │  elapsed 25s   │   remaining ≈ 13s   │   ✓ 2 working   │   ✗ 1 blocked │
 ╰──────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────╮
 │ Working so far                                               2 found │
 ├───┬────────────┬───────────────────────┬───────────┬───────────┬─────┤
-│ # │ Country    │ Location              │ Protocol  │   Latency │ ... │
+│ # │ Country    │ Location              │ Protocol  │     Speed │ ... │
 ```
 
 At the end, the results, a per-protocol summary and the best pick are printed to your normal terminal:
 
 ```
-╭─ ★ Best (lowest latency) ────────────────────╮
-│ 🇳🇱 Amsterdam - Tulip over wireguard · 109 ms │
-│ windscribe-cli connect "Tulip" wireguard     │
-╰──────────────────────────────────────────────╯
+╭─ ★ Best ─────────────────────────────────────────────────╮
+│ 🇳🇱 Amsterdam - Tulip over wireguard · 27.0 Mbps · 109 ms │
+│ windscribe-cli connect "Tulip" wireguard                 │
+╰──────────────────────────────────────────────────────────╯
 ```
 
 ## Notes
