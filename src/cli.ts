@@ -5,10 +5,10 @@
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, loadConfig, loadDockerWireGuard, MIN_TIMEOUT, saveDockerWireGuard, SPEED_TEST } from "./config.js";
+import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, LAST_FILE, loadConfig, loadDockerWireGuard, loadLast, MIN_TIMEOUT, saveDockerWireGuard, saveLast, SPEED_TEST } from "./config.js";
 import { notInContainers, stopWorkers } from "./docker.js";
 import { probe, type Result } from "./probe.js";
-import { Scan, type After } from "./scan.js";
+import { Scan, type After, type Attempt } from "./scan.js";
 import { startParallel } from "./tui/docker.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
@@ -21,9 +21,12 @@ import { blockInternet, CLI, connectState, isFirewallOn, protocolPorts, PROTOCOL
 import { worker } from "./worker.js";
 
 const HELP = `Usage: windscout [options]
+       windscout connect [-t SEC]
 
 Find which Windscribe locations and protocols work from your network, ranked by ${SPEED_TEST ? "speed" : "latency"}.
 Without -c it opens an interactive country picker (your selection is remembered).
+Each scan's working connections are saved: l in the picker rescans just those, and
+windscout connect connects to the best of them that still works, without a scan.
 
 Options:
   -c, --countries LIST  comma-separated ISO codes, city names or nicknames (skips the picker)
@@ -37,9 +40,10 @@ ${SPEED_TEST ? "  -n, --no-speed        connect-only: skip the download test, ra
   -v, --version         show the installed version (and offer to update if a newer one is out)
   -h, --help            show this help
 
-Selection is stored in ${CONFIG}
+Selection is stored in ${CONFIG}, the last result in ${LAST_FILE}
 Examples: windscout -c DE,NL,TR -p stealth,tcp:443
-          windscout -c DE -p stealth,tcp -P`;
+          windscout -c DE -p stealth,tcp -P
+          windscout connect`;
 
 // "DE, NL,,TR" → ["DE", "NL", "TR"]
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -50,6 +54,21 @@ const ask = (question: string) => new Promise<string | null>((resolve) => {
   rl.on("close", () => resolve(null));
   rl.question(question, (a) => (resolve(a.trim()), rl.close()));
 });
+
+/** Runs a result's connect command and waits for it to connect, up to the timeout; true once it has */
+async function connectTo(r: Result, timeout: number): Promise<boolean> {
+  console.log(cyan(command(r)));
+  await windscribe("connect", "-n", target(r), r.protocol); // -n: returns right away, so the timeout here holds
+  let state = "";
+  for (const t = now(); now() - t < timeout; await sleep(1000)) {
+    state = await connectState();
+    // as the scan's probe tells: connected, or given up
+    if (state.startsWith("Connected") || state.includes("does not exist") || (state === "Disconnected" && now() - t > 3)) break;
+  }
+  const ok = state.startsWith("Connected");
+  console.log(ok ? green(state) : yellow(`${state || "not connected"} after ${timeout} s`));
+  return ok;
+}
 
 /** Asks which numbered connection to make (enter: the best), then runs its command and waits for it to connect */
 async function offerConnect(choices: Result[], timeout: number): Promise<void> {
@@ -62,13 +81,30 @@ async function offerConnect(choices: Result[], timeout: number): Promise<void> {
       console.log(yellow(`no #${a} in the tables`));
       continue;
     }
-    console.log(cyan(command(r)));
-    await windscribe("connect", target(r), r.protocol);
-    let state = "";
-    for (const t = now(); now() - t < timeout && !(state = await connectState()).startsWith("Connected");) await sleep(1000);
-    console.log(state.startsWith("Connected") ? green(state) : yellow(`${state || "not connected"} after ${timeout} s`));
+    await connectTo(r, timeout);
     return;
   }
+}
+
+const RESCAN_HINT = "run windscout and press l to rescan the last result, or start a new scan";
+
+/** windscout connect: the last result's connections, best first, until one connects */
+async function connectLast(timeout: number): Promise<void> {
+  const last = loadLast();
+  if (!last) {
+    console.log(yellow("no saved scan yet: run windscout to scan first"));
+    process.exitCode = 1;
+    return;
+  }
+  await waitForLogin();
+  await windscribe("disconnect"); // a connection already up would read as the first one connecting
+  for (const [i, r] of last.results.entries()) {
+    console.log(`\n${i + 1}/${last.results.length} ${r.location || r.query} over ${r.protocol}`);
+    if (await connectTo(r, timeout)) return;
+  }
+  await windscribe("disconnect"); // don't leave the app trying the last one
+  console.log(yellow(`\nnone of the last result's ${last.results.length} connection${last.results.length === 1 ? "" : "s"} works now: ${RESCAN_HINT}`));
+  process.exitCode = 1;
 }
 
 /** u in the picker: update, then run the new version in this one's place, with the same arguments */
@@ -84,7 +120,8 @@ function updateAndRestart(): void {
 }
 
 async function main(): Promise<void> {
-  const { values: a } = parseArgs({
+  const { values: a, positionals } = parseArgs({
+    allowPositionals: true,
     options: {
       countries: { type: "string", short: "c" },
       protocols: { type: "string", short: "p" },
@@ -106,6 +143,8 @@ async function main(): Promise<void> {
   }
   forgetLogin();
   if (a.help) return console.log(HELP);
+  const [subcommand, ...extra] = positionals;
+  if (subcommand !== undefined && (subcommand !== "connect" || extra.length)) throw new Error(`unknown command '${positionals.join(" ")}': see --help`);
   checkUpdate(); // runs while the app starts and the user picks, before the VPN starts switching
   if (a.version) {
     await checkUpdate();
@@ -115,6 +154,7 @@ async function main(): Promise<void> {
   }
   let timeout = a.timeout ? Number(a.timeout) : undefined;
   if (timeout !== undefined && !(timeout >= MIN_TIMEOUT)) throw new Error(`--timeout must be at least ${MIN_TIMEOUT} seconds`);
+  if (subcommand === "connect") return connectLast(timeout ?? loadConfig()?.timeout ?? DEFAULT_TIMEOUT);
 
   const status = await waitForLogin();
   const tty = Boolean(process.stdin.isTTY && out.isTTY);
@@ -125,10 +165,12 @@ async function main(): Promise<void> {
   let random = a.random;
   let allPorts = a["all-ports"];
   let docker = a.docker;
+  let rescan: Attempt[] | undefined; // l in the picker: the last result's working pairs
   if (!countries) {
     if (!tty) throw new Error("no terminal for the picker: pass countries with -c");
     const saved = loadConfig();
     if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
+    const last = loadLast();
     const choice = await pick(saved, {
       timeout: timeout ?? saved?.timeout ?? DEFAULT_TIMEOUT,
       speedTest: speedTest && (saved?.speed ?? false), // first run: connect-only
@@ -137,11 +179,18 @@ async function main(): Promise<void> {
       random: random || (saved?.random ?? false),
       allPorts: allPorts || (saved?.allPorts ?? false),
       docker: docker || (saved?.docker ?? false),
+      last,
     });
     if (!choice) return;
     if (choice === "update") return updateAndRestart();
     countries = choice.countries;
     protocols ??= choice.protocols;
+    if (choice.rescan && last) {
+      // each pair once, as the last scan asked for it: its port already in the protocol, when it had one
+      rescan = [...new Map(last.results.map((r) => [`${r.query} ${r.protocol}`, { country: r.query, protocol: r.protocol }])).values()];
+      countries = [...new Set(rescan.map((x) => x.country))];
+      protocols = [...new Set(rescan.map((x) => x.protocol))];
+    }
     speedTest = choice.speed;
     firewall = choice.firewall;
     random = choice.random;
@@ -154,13 +203,14 @@ async function main(): Promise<void> {
   // the picker asked for the ports already: waiting for that keeps windscribe-cli free for the scan
   if (allPorts || !a.countries) {
     const lists = await protocolPorts();
-    if (allPorts) protocols = withPorts(protocols, lists);
+    if (allPorts && !rescan) protocols = withPorts(protocols, lists);
   }
   if (random) countries = countries.map((c) => [Math.random(), c] as const).sort(([x], [y]) => x - y).map(([, c]) => c);
+  const only = rescan && countries.flatMap((c) => rescan.filter((x) => x.country === c)); // in the countries' order
 
   let probers = [probe], after: After | undefined; // after: what runs here once the containers are done
   const later = notInContainers(protocols, loadDockerWireGuard()); // as far as the last parallel scan knows
-  const inContainers = countries.length * protocols.filter((p) => !later.has(p)).length;
+  const inContainers = only ? only.filter((x) => !later.has(x.protocol)).length : countries.length * protocols.filter((p) => !later.has(p)).length;
   if (docker && inContainers) {
     const started = await startParallel(inContainers);
     if (!started) return leaveScreen();
@@ -169,7 +219,7 @@ async function main(): Promise<void> {
     after = { prober: probe, protocols: notInContainers(protocols, started.wireguard), name: "this computer" };
     await windscribe("disconnect"); // a VPN connection here would carry the containers' traffic too
   }
-  const scan = new Scan(countries, protocols, { timeout, speedTest }, probers, after);
+  const scan = new Scan(countries, protocols, { timeout, speedTest, only }, probers, after);
   // not with containers: their traffic goes out through this computer, and the firewall would block it
   const blocking = firewall && !after && (await blockInternet());
   const view = tty ? showProgress(scan, blocking) : logProgress(scan);
@@ -180,6 +230,7 @@ async function main(): Promise<void> {
   for (const e of new Set(scan.errors)) console.error(yellow(e));
   if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
   const choices = report(scan.results, protocols, { all: a.all, speedTest });
+  saveLast(choices); // a rescan's too, so what stopped working drops out; a scan where nothing worked keeps the last
   await checkUpdate();
   if (updateNotice()) console.error("\n" + versionLines().join("\n"));
   if (tty && choices.length) await offerConnect(choices, timeout);

@@ -1,4 +1,4 @@
-// A scan: every country × protocol pair, tried in order, with pause and stop.
+// A scan: every country × protocol pair (or only the given pairs, for a rescan), tried in order, with pause and stop.
 // Each slot runs one attempt at a time: one slot here, or one per docker container in a parallel scan.
 import { probe, type ProbeOptions, type Result } from "./probe.js";
 import { now } from "./time.js";
@@ -13,6 +13,7 @@ export type Prober = (query: string, protocol: string, options: ProbeOptions) =>
 export interface ScanOptions {
   timeout: number; // seconds to wait for each connection
   speedTest: boolean; // false = connect-only: skip the download test, rank by latency
+  only?: readonly Attempt[]; // just these pairs, not every country × protocol: a rescan of the last result
 }
 
 /** Called around each attempt, e.g. to print a progress line */
@@ -36,7 +37,7 @@ export interface Slot {
   name?: string; // the after-slot's
 }
 
-type Attempt = { country: string; protocol: string };
+export type Attempt = { country: string; protocol: string };
 
 /** Progress views read the fields; their keys call togglePause() and stop() */
 export class Scan {
@@ -58,7 +59,7 @@ export class Scan {
 
   constructor(readonly countries: readonly string[], readonly protocols: readonly string[], readonly options: ScanOptions,
     private readonly probers: Prober[] = [probe], private readonly after?: After) {
-    this.total = countries.length * protocols.length;
+    this.total = this.attempts().length;
     this.slots = probers.map(() => ({ current: null, step: "", attemptStart: now() }));
     if (after) this.slots.push({ current: null, step: "", attemptStart: now(), name: after.name });
   }
@@ -85,9 +86,15 @@ export class Scan {
     this.resume();
   }
 
+  private attempts(): Attempt[] {
+    return this.options.only?.map((a) => ({ ...a }))
+      ?? this.countries.flatMap((country) => this.protocols.map((protocol) => ({ country, protocol })));
+  }
+
   async run(hooks: ScanHooks = {}): Promise<Result[]> {
-    const queue = this.countries.flatMap((country) => this.protocols.map((protocol) => ({ country, protocol })));
-    const left = new Map(this.countries.map((c) => [c, this.protocols.length])); // attempts to go, per country
+    const queue = this.attempts();
+    const left = new Map<string, number>(); // attempts to go, per country
+    for (const { country } of queue) left.set(country, (left.get(country) ?? 0) + 1);
     const later = this.after?.protocols ?? new Set();
     await Promise.all(this.probers.map((prober, i) => this.work(prober, this.slots[i], (p) => !later.has(p), queue, left, hooks)));
     // then the rest, also what slots whose container stopped left over

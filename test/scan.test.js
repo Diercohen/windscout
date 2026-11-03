@@ -23,6 +23,16 @@ test("slots share the attempts, each runs once, and a missing country's other pr
   assert.equal(scan.results.filter((r) => r.status === "ok").length, 6);
 });
 
+test("a rescan tries only the given pairs, and each country finishes after its own", async () => {
+  const tried = [];
+  const only = [{ country: "DE", protocol: "a" }, { country: "NL", protocol: "b:443" }, { country: "NL", protocol: "a" }];
+  const scan = new Scan(["DE", "NL"], ["a", "b:443"], { ...OPTIONS, only }, [fake(tried)]);
+  await scan.run();
+  assert.equal(scan.total, 3);
+  assert.deepEqual(tried, ["DE a", "NL b:443", "NL a"]);
+  assert.deepEqual(scan.finished, ["DE", "NL"]);
+});
+
 test("when a slot's container stops, the others take over its attempt", async () => {
   const tried = [];
   let stopped = false;

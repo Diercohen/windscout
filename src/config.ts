@@ -1,7 +1,8 @@
-// The picker's selection, and what the last parallel scan found its containers can do, remembered between runs.
+// The picker's selection, what the last parallel scan found its containers can do, and the last scan's working results, remembered between runs.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { Result } from "./probe.js";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
 // false hides the speed test: every scan is connect-only, and a saved "on" reads as off
@@ -12,6 +13,7 @@ export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that wou
 
 export const CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "windscout", "config.json");
 const DOCKER_FILE = join(dirname(CONFIG), "docker.json"); // what the last parallel scan found its containers can do
+export const LAST_FILE = join(dirname(CONFIG), "last.json"); // the last scan's working connections
 
 export interface Choice {
   countries: string[];
@@ -63,6 +65,32 @@ export function saveDockerWireGuard(wireguard: boolean): void {
   try {
     mkdirSync(dirname(DOCKER_FILE), { recursive: true });
     writeFileSync(DOCKER_FILE, JSON.stringify({ wireguard }) + "\n");
+  } catch {} // not being able to remember isn't worth failing the scan
+}
+
+/** The last scan's working connections, best first (as the report numbers them), for a rescan and windscout connect */
+export interface Last {
+  at: number; // when the scan ended, ms since the epoch
+  results: Result[];
+}
+
+/** The last scan that found something; null when there's none or the file is unreadable */
+export function loadLast(): Last | null {
+  try {
+    const l = JSON.parse(readFileSync(LAST_FILE, "utf8"));
+    const results = (l.results ?? []).filter((r: Result) => r?.status === "ok" && typeof r.query === "string" && typeof r.protocol === "string");
+    return results.length && typeof l.at === "number" ? { at: l.at, results } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Saves a scan's working connections; a scan where nothing worked keeps the last one that found something */
+export function saveLast(results: Result[], at = Date.now()): void {
+  if (!results.length) return;
+  try {
+    mkdirSync(dirname(LAST_FILE), { recursive: true });
+    writeFileSync(LAST_FILE, JSON.stringify({ at, results }, null, 2) + "\n");
   } catch {} // not being able to remember isn't worth failing the scan
 }
 
