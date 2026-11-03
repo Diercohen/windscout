@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, LAST_FILE, loadConfig, loadDockerWireGuard, loadLast, MIN_TIMEOUT, saveDockerWireGuard, saveLast, SPEED_TEST } from "./config.js";
 import { notInContainers, stopWorkers } from "./docker.js";
-import { probe, type Result } from "./probe.js";
+import { attempt, disconnect, probe, type Result } from "./probe.js";
 import { Scan, type After, type Attempt } from "./scan.js";
 import { startParallel } from "./tui/docker.js";
 import { pick } from "./tui/picker.js";
@@ -15,9 +15,9 @@ import { logProgress, showProgress } from "./tui/progress.js";
 import { command, report, target } from "./tui/report.js";
 import { leaveScreen, out } from "./tui/terminal.js";
 import { cyan, green, yellow } from "./tui/text.js";
-import { now, sleep } from "./time.js";
+import { duration, now } from "./time.js";
 import { canUpdate, checkUpdate, runUpdate, updateNotice, versionLines } from "./update.js";
-import { blockInternet, CLI, connectState, isFirewallOn, protocolPorts, PROTOCOLS, restoreFirewall, waitForLogin, windscribe, withPorts } from "./windscribe.js";
+import { blockInternet, CLI, isFirewallOn, protocolPorts, PROTOCOLS, restoreFirewall, waitForLogin, windscribe, withPorts } from "./windscribe.js";
 import { worker } from "./worker.js";
 
 const HELP = `Usage: windscout [options]
@@ -55,19 +55,15 @@ const ask = (question: string) => new Promise<string | null>((resolve) => {
   rl.question(question, (a) => (resolve(a.trim()), rl.close()));
 });
 
-/** Runs a result's connect command and waits for it to connect, up to the timeout; true once it has */
+/** Runs a result's connect command and checks it as the scan does: connected, on its port, with internet through it.
+ * True once it is; otherwise disconnects (and waits until the app has), so the next connect isn't swallowed */
 async function connectTo(r: Result, timeout: number): Promise<boolean> {
   console.log(cyan(command(r)));
-  await windscribe("connect", "-n", target(r), r.protocol); // -n: returns right away, so the timeout here holds
-  let state = "";
-  for (const t = now(); now() - t < timeout; await sleep(1000)) {
-    state = await connectState();
-    // as the scan's probe tells: connected, or given up
-    if (state.startsWith("Connected") || state.includes("does not exist") || (state === "Disconnected" && now() - t > 3)) break;
-  }
-  const ok = state.startsWith("Connected");
-  console.log(ok ? green(state) : yellow(`${state || "not connected"} after ${timeout} s`));
-  return ok;
+  const t = now(), { status, location } = await attempt(target(r), r.protocol, { timeout, speedTest: false });
+  if (status === "ok") return console.log(green(`Connected: ${location}`)), true;
+  console.log(yellow(`${status} after ${duration(now() - t)}`));
+  await disconnect();
+  return false;
 }
 
 /** Asks which numbered connection to make (enter: the best), then runs its command and waits for it to connect */
@@ -97,12 +93,11 @@ async function connectLast(timeout: number): Promise<void> {
     return;
   }
   await waitForLogin();
-  await windscribe("disconnect"); // a connection already up would read as the first one connecting
+  await disconnect(); // a connection already up would read as the first one connecting
   for (const [i, r] of last.results.entries()) {
     console.log(`\n${i + 1}/${last.results.length} ${r.location || r.query} over ${r.protocol}`);
     if (await connectTo(r, timeout)) return;
   }
-  await windscribe("disconnect"); // don't leave the app trying the last one
   console.log(yellow(`\nnone of the last result's ${last.results.length} connection${last.results.length === 1 ? "" : "s"} works now: ${RESCAN_HINT}`));
   process.exitCode = 1;
 }
@@ -145,6 +140,7 @@ async function main(): Promise<void> {
   if (a.help) return console.log(HELP);
   const [subcommand, ...extra] = positionals;
   if (subcommand !== undefined && (subcommand !== "connect" || extra.length)) throw new Error(`unknown command '${positionals.join(" ")}': see --help`);
+  if (subcommand === "connect" && Object.entries(a).some(([k, v]) => k !== "timeout" && v)) throw new Error("windscout connect takes only -t: see --help");
   checkUpdate(); // runs while the app starts and the user picks, before the VPN starts switching
   if (a.version) {
     await checkUpdate();
@@ -230,7 +226,10 @@ async function main(): Promise<void> {
   for (const e of new Set(scan.errors)) console.error(yellow(e));
   if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
   const choices = report(scan.results, protocols, { all: a.all, speedTest });
-  saveLast(choices); // a rescan's too, so what stopped working drops out; a scan where nothing worked keeps the last
+  // a rescan's too, so what stopped working drops out; a scan where nothing worked keeps the last;
+  // a stopped one keeps the saved connections it didn't get to
+  const tried = new Set(scan.results.filter((r) => r.status !== "interrupted").map((r) => `${r.query} ${r.protocol}`));
+  saveLast(choices, undefined, scan.stopping ? tried : undefined);
   await checkUpdate();
   if (updateNotice()) console.error("\n" + versionLines().join("\n"));
   if (tty && choices.length) await offerConnect(choices, timeout);

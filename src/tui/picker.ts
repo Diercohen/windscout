@@ -50,7 +50,7 @@ const flip = <T>(set: Set<T>, value: T) => (set.has(value) ? set.delete(value) :
 // "5m ago", "3h ago", "2 days ago"
 const ago = (ms: number) => {
   const m = Math.max(0, Math.round((Date.now() - ms) / 60000)), h = Math.round(m / 60), d = Math.round(h / 24);
-  return m < 60 ? `${m}m ago` : h < 48 ? `${h}h ago` : `${d} days ago`;
+  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : h < 48 ? `${h}h ago` : `${d} days ago`;
 };
 
 /** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
@@ -109,9 +109,11 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       const short = timeout < MIN_TIMEOUT;
       const timeoutLine = `${dim(under("t"))} timeout ${editing ? bold(seconds) + cyan("▏") : (short ? yellow : bold)(seconds || "?")} s  ${dim(`per connection · at least ${MIN_TIMEOUT}`)}`;
       const n = attempts();
-      const here = PROTOCOLS.filter((p) => docker && protos.has(p) && notInContainers(PROTOCOLS, wireguard).has(p)); // after the containers
+      const base = (p: string) => p.split(":")[0]; // "wireguard:443" → "wireguard"
+      const scanned = rescan ? new Set(last!.results.map((r) => base(r.protocol))) : protos;
+      const here = PROTOCOLS.filter((p) => docker && scanned.has(p) && notInContainers(PROTOCOLS, wireguard).has(p)); // after the containers
       const inContainers = rescan
-        ? last!.results.filter((r) => !docker || !notInContainers([r.protocol], wireguard).size).length
+        ? last!.results.filter((r) => !here.includes(base(r.protocol))).length
         : selected.size * perCountry([...protos].filter((p) => !here.includes(p)));
       const parallel = docker && dockerAt === "ready" && inContainers > 0;
       const slots = parallel ? workerCount(inContainers) : 1;
@@ -124,7 +126,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
       const rescanLabel = "rescan last result";
       const rescanLine = `${dim(under("l"))} ${rescan ? green("● " + rescanLabel) : dim("○ " + rescanLabel)}  ${dim(!last
         ? "no saved scan yet"
-        : `${last.results.length} working · ${ago(last.at)}${rescan ? " · instead of the countries below" : ""}`)}`;
+        : `${last.results.length} working · ${ago(last.at)}${rescan ? " · instead of the choices here" : ""}`)}`;
       const search = searching
         ? `${cyan("🔍")} ${bold(query)}${cyan("▏")}`
         : query ? `🔍 ${query}` : dim("🔍 press / to search");
@@ -162,7 +164,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, rando
         "",
         centerIn(n
           ? `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(login + estimate(inContainers, timeout, slots) + estimate(n - inContainers, timeout)))} ${dim(`(~${attemptSeconds(timeout)}s each${slots > 1 ? `, ${slots} at a time` : ""}${login ? `, + ~${duration(login)} login` : ""})`)}`
-          : yellow("select at least one country and one protocol, or l to rescan the last result"), width),
+          : yellow(`select at least one country and one protocol${last ? ", or l to rescan the last result" : ""}`), width),
         centerIn(dim(editing
           ? "type the seconds to wait for each connection · enter/esc done"
           : searching

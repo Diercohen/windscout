@@ -144,10 +144,10 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 
 ## Last result: rescan and connect
 
-After each scan, WindScout saves its working connections, best first, to `~/.config/windscout/last.json`. That includes a partial scan you stopped, and a scan started with `-c`. A scan where nothing worked keeps the previous result.
+After each scan, WindScout saves its working connections, best first, to `~/.config/windscout/last.json`. That includes a partial scan you stopped, and a scan started with `-c`. A scan where nothing worked keeps the previous result, and a scan you stopped keeps the saved connections it didn't get to.
 
 - **Rescan:** in the picker, the `l` line shows the saved result (`3 working · 2 days ago`). Press `l` and start, and only those location and protocol pairs (on their port, if they had one) are tried again, instead of the selected countries. The timeout, speed test, firewall and docker settings apply as usual, and the estimate counts the saved pairs. The rescan's working connections replace the saved ones, so the ones that stopped working drop out. Rescan isn't remembered: the picker opens with it off, and your country selection stays as it was.
-- **Connect:** `windscout connect` connects to the best saved connection, without a scan. When it doesn't connect within the timeout (`-t`, or the saved one), it tries the next, until one connects. When none does, or there's no saved scan, it says so and suggests a rescan or a new scan.
+- **Connect:** `windscout connect` connects to the best saved connection, without a scan. It checks each as the scan does: when one doesn't connect within the timeout (`-t`, or the saved one), or has no internet through it, it tries the next, until one connects. When none does, or there's no saved scan, it says so and suggests a rescan or a new scan.
 
 ```sh
 windscout connect          # the best saved connection that still works

@@ -1,4 +1,5 @@
 // One attempt: connect to a location over a protocol, measure through the tunnel, disconnect.
+// windscout connect makes the same attempt and, when it works, stays connected.
 import { latencyMs, speedMbps } from "./measure.js";
 import { now, sleep } from "./time.js";
 import { connectState, windscribe } from "./windscribe.js";
@@ -27,49 +28,59 @@ export interface ProbeOptions {
 // "Connected: Miami - Vice" → "Miami - Vice"
 const place = (state: string) => state.split(":").slice(1).join(":").trim();
 
-export async function probe(query: string, protocol: string,
+export async function probe(query: string, protocol: string, options: ProbeOptions): Promise<Result> {
+  try {
+    return await attempt(query, protocol, options);
+  } finally {
+    options.onStep?.("disconnecting");
+    await disconnect();
+  }
+}
+
+/** Disconnects, and waits until the app has */
+export async function disconnect(): Promise<void> {
+  await windscribe("disconnect");
+  // the CLI's disconnect can return while the app is still tearing down (it does after a timed-out connect);
+  // a connect sent then is swallowed and the next attempt reads as an instant "failed", so wait it out
+  for (let i = 0; i < 30 && (await connectState()) === "Disconnecting"; i++) await sleep(1000);
+}
+
+/** Connects and measures through the tunnel, as probe does, but leaves the connection as it is: up when it worked */
+export async function attempt(query: string, protocol: string,
   { timeout, speedTest, stopped = () => false, onStep = () => {}, measure = (fn) => fn() }: ProbeOptions): Promise<Result> {
   const r: Omit<Result, "status"> = { query, protocol, location: "", connectS: null, latencyMs: null, speedMbps: null };
   const end = (status: Status): Result => ({ ...r, status });
   onStep("connecting");
   await windscribe("connect", "-n", query, protocol);
   const t = now();
-  try {
-    for (;;) {
-      if (stopped()) return end("interrupted");
-      if (now() - t >= timeout) return end("timeout");
-      const s = await connectState();
-      if (s.startsWith("Connecting:")) r.location = place(s);
-      else if (s.startsWith("Connected")) {
-        if (s.includes(":")) r.location = place(s);
-        r.connectS = now() - t;
-        break;
-      } else if (s.includes("does not exist")) return end("no such location");
-      // Windscribe refused this app another WireGuard key for the account: says nothing about this network
-      else if (s.includes("WireGuard key limit") && now() - t > 3) return end("key limit");
-      else if (s === "Disconnected" && now() - t > 3) return end("failed");
-      onStep(`connecting ${r.location}`.trim());
-      await sleep(1000);
-    }
-    // a port the app doesn't offer for the protocol: it connects on the protocol's default instead, so this port wasn't tried
-    const port = protocol.split(":")[1], shown = (await windscribe("status")).match(/^Protocol: .*:(\d+)\s*$/m)?.[1];
-    if (port && shown && shown !== port) return end("no such port");
-    await measure(async () => {
-      onStep(`measuring latency · ${r.location}`);
-      r.latencyMs = await latencyMs();
-      if (r.latencyMs !== null && speedTest) {
-        onStep(`measuring speed · ${r.location}`);
-        r.speedMbps = await speedMbps();
-      }
-    });
-    return end(r.latencyMs === null ? "no internet" : "ok");
-  } finally {
-    onStep("disconnecting");
-    await windscribe("disconnect");
-    // the CLI's disconnect can return while the app is still tearing down (it does after a timed-out connect);
-    // a connect sent then is swallowed and the next attempt reads as an instant "failed", so wait it out
-    for (let i = 0; i < 30 && (await connectState()) === "Disconnecting"; i++) await sleep(1000);
+  for (;;) {
+    if (stopped()) return end("interrupted");
+    if (now() - t >= timeout) return end("timeout");
+    const s = await connectState();
+    if (s.startsWith("Connecting:")) r.location = place(s);
+    else if (s.startsWith("Connected")) {
+      if (s.includes(":")) r.location = place(s);
+      r.connectS = now() - t;
+      break;
+    } else if (s.includes("does not exist")) return end("no such location");
+    // Windscribe refused this app another WireGuard key for the account: says nothing about this network
+    else if (s.includes("WireGuard key limit") && now() - t > 3) return end("key limit");
+    else if (s === "Disconnected" && now() - t > 3) return end("failed");
+    onStep(`connecting ${r.location}`.trim());
+    await sleep(1000);
   }
+  // a port the app doesn't offer for the protocol: it connects on the protocol's default instead, so this port wasn't tried
+  const port = protocol.split(":")[1], shown = (await windscribe("status")).match(/^Protocol: .*:(\d+)\s*$/m)?.[1];
+  if (port && shown && shown !== port) return end("no such port");
+  await measure(async () => {
+    onStep(`measuring latency · ${r.location}`);
+    r.latencyMs = await latencyMs();
+    if (r.latencyMs !== null && speedTest) {
+      onStep(`measuring speed · ${r.location}`);
+      r.speedMbps = await speedMbps();
+    }
+  });
+  return end(r.latencyMs === null ? "no internet" : "ok");
 }
 
 /** The attempts that worked, best first: fastest, then lowest latency */

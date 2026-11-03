@@ -37,6 +37,9 @@ test("the last result's working connections are saved best first, and a scan whe
   assert.deepEqual(loadLast(), { at: 1000, results: [ok("DE", "tcp:443", 40), ok("NL", "stealth", 60)] });
   saveLast([], 2000);
   assert.equal(loadLast().at, 1000);
+  // stopped after trying DE tcp:443 (failed) and FR udp (worked): NL stealth wasn't reached, so it stays
+  saveLast([ok("FR", "udp", 30)], 3000, new Set(["DE tcp:443", "FR udp"]));
+  assert.deepEqual(loadLast(), { at: 3000, results: [ok("FR", "udp", 30), ok("NL", "stealth", 60)] });
   writeFileSync(LAST_FILE, "not json");
   assert.equal(loadLast(), null);
 });

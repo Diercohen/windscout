@@ -85,8 +85,10 @@ export function loadLast(): Last | null {
   }
 }
 
-/** Saves a scan's working connections; a scan where nothing worked keeps the last one that found something */
-export function saveLast(results: Result[], at = Date.now()): void {
+/** Saves a scan's working connections; a scan where nothing worked keeps the last one that found something.
+ * With tried (a stopped scan's "query protocol" pairs), the saved connections it didn't get to stay, after its own */
+export function saveLast(results: Result[], at = Date.now(), tried?: ReadonlySet<string>): void {
+  if (tried) results = [...results, ...(loadLast()?.results ?? []).filter((r) => !tried.has(`${r.query} ${r.protocol}`))];
   if (!results.length) return;
   try {
     mkdirSync(dirname(LAST_FILE), { recursive: true });
