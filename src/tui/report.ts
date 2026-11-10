@@ -1,5 +1,5 @@
 // The final report, printed to the normal screen so it stays in the scrollback.
-import { sortOk, type Result } from "../probe.js";
+import { sortOk, target, type Result } from "../probe.js";
 import { CLI } from "../windscribe.js";
 import { flag } from "./country.js";
 import { matrix, resultTable } from "./tables.js";
@@ -11,8 +11,6 @@ export interface ReportOptions {
   speedTest: boolean; // the scan measured speed; without it, results rank by latency
 }
 
-// nickname pins the exact datacenter
-export const target = (r: Result) => r.location.split(" - ").at(-1) || r.query;
 export const command = (r: Result) => `${CLI} connect "${target(r)}" ${r.protocol}`;
 
 /** Prints the report; returns the connections it numbered: the best (#0), then the others (#1…) */

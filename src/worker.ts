@@ -12,7 +12,7 @@ const APP = "/opt/windscribe/Windscribe"; // as the image installs it
 
 type Message = Partial<{ // from the host
   session: Session; // the first message: the session this computer's app is logged in with
-  probe: { query: string; protocol: string; timeout: number; speedTest: boolean; steady: boolean };
+  probe: { query: string; protocol: string; timeout: number; speedTest: boolean; steady: number };
   go: boolean; // our turn to measure
   stop: boolean;
 }>;

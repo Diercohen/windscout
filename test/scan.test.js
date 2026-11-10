@@ -111,7 +111,7 @@ test("default and by random country: every country × protocol, random shuffling
   for (let i = 0; i < shuffled.length; i += 2) assert.equal(shuffled[i].country, shuffled[i + 1].country);
 });
 
-test("stop at the first: the probes check each connection holds up, and the scan stops at the first reliable one", async () => {
+test("stop at the first: the probes check each connection holds up for the hold, and the scan stops at the first reliable one", async () => {
   const tried = [], steady = [];
   const result = (query, protocol, status, speedMbps) => ({ query, protocol, location: "", connectS: 1, latencyMs: 1, speedMbps, status });
   const prober = async (query, protocol, options) => {
@@ -124,14 +124,14 @@ test("stop at the first: the probes check each connection holds up, and the scan
     while (!options.stopped()) await new Promise((resolve) => setTimeout(resolve, 1)); // still connecting when FR holds up
     return result(query, protocol, "interrupted", null);
   };
-  const scan = new Scan(["DE", "NL", "FR", "TR", "GB"], ["a"], { ...OPTIONS, stopAtFirst: true }, [prober]);
+  const scan = new Scan(["DE", "NL", "FR", "TR", "GB"], ["a"], { ...OPTIONS, stopAtFirst: 30 }, [prober]);
   await scan.run();
   assert.equal(scan.found, true);
   assert.deepEqual(tried, ["DE a", "NL a", "FR a"]); // TR and GB never start
-  assert.ok(steady.every(Boolean));
+  assert.ok(steady.every((s) => s === 30)); // the hold, in seconds
 
   tried.length = 0; // two slots: TR, running when FR holds up, gives up
-  const parallel = new Scan(["TR", "FR", "GB"], ["a"], { ...OPTIONS, stopAtFirst: true }, [prober, prober]);
+  const parallel = new Scan(["TR", "FR", "GB"], ["a"], { ...OPTIONS, stopAtFirst: 30 }, [prober, prober]);
   await parallel.run();
   assert.deepEqual(parallel.results.map((r) => `${r.query} ${r.status}`).sort(), ["FR ok", "TR interrupted"]);
 

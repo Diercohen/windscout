@@ -108,6 +108,7 @@ Run `windscout` with no arguments to open the interactive picker:
 | `d` | toggle the [parallel scan in docker containers](#parallel-scan-with-docker) (installs or starts docker first, after asking) |
 | `o` | change the [scanning type](#scanning-type): default, by random country, by last success result first, only the last results |
 | `w` | toggle [stop at the first working connection](#stop-at-the-first-working-connection) that holds up |
+| `h` | type how many seconds each working connection has to [hold up](#stop-at-the-first-working-connection) for `w` (enter/esc to finish) |
 | `u` | update to the newer version and restart (only when the picker shows one is out) |
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
@@ -116,7 +117,7 @@ Run `windscout` with no arguments to open the interactive picker:
 
 Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
-After you start, the Start button spins (`[ ⠋ Starting… ]`) until the scan's screen shows, which can take a moment when it turns the firewall on or starts docker. While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter or `0` to connect to the best one, type another one's number and press enter to connect to that, or press `q` to quit. `0` and `q` work right away, without enter.
+After you start, the Start button spins (`[ ⠋ Starting… ]`) until the scan's screen shows, which can take a moment when it turns the firewall on or starts docker. While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter or `0` to connect to the best one, type another one's number and press enter to connect to that, or press `q` to quit. `0` and `q` work right away, without enter. When the one you chose doesn't connect, the next ones are tried, and once one is up, WindScout [watches it](#last-result-rescan-and-connect).
 
 ### Non-interactive
 
@@ -140,6 +141,7 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
 | `-o, --order` | [scanning type](#scanning-type): `default`, `random`, `last-first` or `last-only` (`-r` still works: the same as `-o random`) | picker: saved, or `default`; with `-c`: `default` |
 | `-w, --stop-at-first` | [stop at the first working connection](#stop-at-the-first-working-connection) that holds up | picker: saved, or off; with `-c`: off |
+| `-H, --hold` | with `-w`: seconds each working connection has to [hold up](#stop-at-the-first-working-connection), at least 10 | picker: saved, or 30; with `-c`: 30 |
 | `-d, --docker` | [scan in parallel, in docker containers](#parallel-scan-with-docker) | picker: saved, or off; with `-c`: off |
 | `-v, --version` | print the installed version; if a newer one is on npm, show the update command (with `sudo` when needed) and ask (y/n) to run it | |
 
@@ -149,9 +151,10 @@ After each scan, WindScout saves its working connections, best first, to `~/.con
 
 - **Rescan:** the [scanning types](#scanning-type) *by last success result first* and *only the last results* use the saved connections: the first tries the ones in your selection before the rest of it, the second tries only them.
 - **Connect:** `windscout connect` connects to the best saved connection, without a scan. It checks each as the scan does: when one doesn't connect within the timeout (`-t`, or the saved one), or has no internet through it, it tries the next, until one connects. When none does, or there's no saved scan, it says so and suggests a rescan or a new scan.
+- **Watching:** in a terminal, once a connection is up (from `windscout connect`, or the connect prompt after a scan), WindScout stays and watches it. Every 3 s it checks that the app is still connected, with internet through it, and a line shows how long it's been up and its latency. When 3 checks in a row find it down, it connects again: to the same one first if it had lasted 5 minutes, else to the next ones first, and to the one that dropped last. When none connects, it waits 30 s and tries them all again, from the best. Each drop is printed with the time it was noticed. Press `q` to stop watching: the VPN stays as it is. Disconnecting in the app (or with `windscribe-cli disconnect`), connecting it somewhere else, or quitting it stops the watching too, within a check or two, and WindScout leaves the VPN alone: it tells those apart from a drop by the app's own log (`~/.local/share/Windscribe/Windscribe2/client.log` on Linux). If you quit the app, WindScout's next check starts it again, as any `windscribe-cli` command does. Where WindScout can't read that log, it takes your disconnect for a drop and connects you again, so press `q` first. Without a terminal, `windscout connect` connects and exits.
 
 ```sh
-windscout connect          # the best saved connection that still works
+windscout connect          # the best saved connection that still works, then watch it
 windscout connect -t 30    # wait longer for each
 ```
 
@@ -170,14 +173,16 @@ The two types by the last result need a saved scan. Until there is one, choosing
 
 ### Stop at the first working connection
 
-Press `w` in the picker, or pass `-w`, to end the scan at the first connection that works and holds up: the attempts still connecting give up, and no more start. The scan stops at one connection, so that one has to be good for long use. A tunnel can connect and then be cut or throttled once traffic flows, so each connection that connects is checked first:
+Press `w` in the picker, or pass `-w`, to end the scan at the first connection that works and holds up: the attempts still connecting give up, and no more start. The scan stops at one connection, so that one has to be good for long use. A tunnel can connect and then be cut or throttled once traffic flows, or refuse the next connection, which is the one you make. So each connection that connects is checked first:
 
-1. A speed test, even with the speed test off (`s`, `-n`). It must reach at least 1 Mbps.
-2. Then it has to stay connected, with internet through it, for 5 round trips 2 s apart (about 10 s), each round trip allowed one retry.
+1. **Speed test**, even with the speed test off (`s`, `-n`). It must reach at least 1 Mbps.
+2. **Hold:** it has to stay connected to the same server for 30 s, with a round trip through it every 2 s. A lost round trip now and then is fine, but 2 in a row (an outage), or more than 1 in 10, fail it. Change the 30 s with `h` in the picker or `-H` (at least 10, saved with your other settings): a longer hold catches connections that drop later, but takes longer for each one.
+3. **Speed test again.** It must still reach 1 Mbps, which catches a connection that gets throttled once traffic flows. The table shows the slower of the two.
+4. **Reconnect:** it disconnects and connects again the way you will, by the datacenter's nickname (`windscribe-cli connect "Castle" stealth`): within the timeout, with internet through it.
 
-A connection that drops during the check gets the status `unreliable` and doesn't count as working: it isn't saved, or offered to connect to. One that stays up but is slower than 1 Mbps still counts as working, but the scan doesn't stop there and keeps looking. If nothing passes, the scan runs to the end, and the report shows whatever worked.
+A connection that fails a check gets the status `unreliable` and doesn't count as working: it isn't saved, or offered to connect to. One slower than 1 Mbps still counts as working, but isn't checked: the scan never stops there, and keeps looking. If nothing passes, the scan runs to the end, the report shows whatever worked, and a line above it says those connections weren't checked.
 
-The check adds up to about 30 s to each connection that connects (the speed test alone takes up to 15 s). The estimate reads `up to N attempts · at most ≈ …`, for when none holds up. With a type by the last result, the best saved connection goes first, and the line shows about how long the scan takes if it still holds up (`≈ 33s if DE stealth still holds up`). It's the quickest way back online: *only the last results* or *by last success result first*, with `w`.
+The checks add about 1m 15s to each connection that passes the first speed test (each speed test takes up to 15 s), more with a longer hold; the `w` line shows it. The estimate reads `up to N attempts · ≈ … if none connects`. With a type by the last result, the best saved connection goes first, and the `w` line shows about how long the scan takes if it still holds up (`≈ 1m 15s if DE stealth still holds up`). It's the quickest way back online: *only the last results* or *by last success result first*, with `w`. In a [parallel scan](#parallel-scan-with-docker), the containers take turns for the speed tests and the hold, as they do for measuring, and each reconnects after its turn.
 
 ## Connect-only mode
 

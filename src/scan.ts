@@ -14,7 +14,9 @@ export interface ScanOptions {
   timeout: number; // seconds to wait for each connection
   speedTest: boolean; // false = connect-only: skip the download test, rank by latency
   only?: readonly Attempt[]; // just these pairs, in this order (plan()), not every country × protocol in list order
-  stopAtFirst?: boolean; // check each connection holds up (probe's steady), and stop at the first reliable one: no more start
+  // seconds each connection that connects has to hold up (probe's steady); the scan stops at the first reliable one, and no
+  // more start. 0: off
+  stopAtFirst?: number;
 }
 
 /** Called around each attempt, e.g. to print a progress line */
@@ -119,7 +121,7 @@ export class Scan {
 
   /** One slot: takes the attempts from the queue, one at a time, until there are none */
   private async work(prober: Prober, slot: Slot, queue: Attempt[], left: Map<string, number>, hooks: ScanHooks) {
-    const { timeout, speedTest, stopAtFirst = false } = this.options;
+    const { timeout, speedTest, stopAtFirst = 0 } = this.options;
     for (;;) {
       while (this.paused && !this.stopping) {
         if (!this.waiting && this.slots.every((s) => !s.current)) { // the last running attempt is over

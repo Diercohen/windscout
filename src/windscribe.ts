@@ -1,6 +1,6 @@
 // The Windscribe desktop app, driven through the windscribe-cli it ships with.
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { sleep } from "./time.js";
@@ -72,6 +72,9 @@ export async function windscribe(...args: string[]): Promise<string> {
   return out.split("\n").filter((l) => !l.startsWith('{"tm"')).join("\n");
 }
 
+// "Connected: Miami - Vice" → "Miami - Vice"
+export const place = (state: string) => state.split(":").slice(1).join(":").trim();
+
 /** "Connected: Miami - Vice", "Connecting: …", "Disconnected", … */
 export async function connectState(): Promise<string> {
   // macOS marks the line with a leading "*" once connected: "*Connect state: Connected: Miami - Vice"
@@ -142,6 +145,36 @@ function setting(key: string): string {
 export function session(): Session | null {
   const authHash = setting("authHash");
   return authHash ? { userId: setting("userId"), authHash } : null;
+}
+
+// The app's own log, in Qt's app data folder. It notes each disconnect the app is told to make (its disconnect button, a switch
+// to another location, windscribe-cli disconnect) with this line, but not the one it makes itself after failing to reconnect
+const APP_LOG = join(process.platform === "darwin" ? join(homedir(), "Library", "Application Support")
+  : process.platform === "win32" ? process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local")
+  : process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "Windscribe", "Windscribe2", "client.log");
+const TOLD = "ConnectionManager::clickDisconnect()";
+const STARTED = "=== Started ==="; // the first line of each log the app starts when it starts
+
+/** The app log's size now, for toldToDisconnect(); 0 when there's no log */
+export function appLogSize(): number {
+  try {
+    return statSync(APP_LOG).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Whether the app was told to disconnect since its log was size bytes long, or restarted (quit, which disconnects, then
+ * started again: by windscribe-cli, which starts it when it isn't running); false when it can't tell (no log, or another app
+ * version that words it differently) */
+export function toldToDisconnect(size: number): boolean {
+  try {
+    const log = readFileSync(APP_LOG);
+    // shorter: a new log, which the app starts when it starts (or when one grows too long, without STARTED)
+    return log.length < size ? log.includes(TOLD) || log.includes(STARTED) : log.subarray(size).includes(TOLD);
+  } catch {
+    return false;
+  }
 }
 
 export const isFirewallOn = (status: string) => /^Firewall state: On/m.test(status);

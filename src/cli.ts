@@ -5,17 +5,18 @@
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, LAST_FILE, loadConfig, loadDockerWireGuard, loadLast, MIN_TIMEOUT, saveDockerWireGuard, saveLast, SPEED_TEST } from "./config.js";
+import { CONFIG, DEFAULT_HOLD, DEFAULT_TIMEOUT, forgetLogin, LAST_FILE, loadConfig, loadDockerWireGuard, loadLast, MIN_HOLD, MIN_TIMEOUT, saveDockerWireGuard, saveLast, SPEED_TEST } from "./config.js";
 import { notInContainers, stopWorkers } from "./docker.js";
-import { attempt, disconnect, MIN_MBPS, probe, type Result } from "./probe.js";
+import { disconnect, MIN_MBPS, probe, type Result } from "./probe.js";
 import { ORDERS, plan, Scan, type Order } from "./scan.js";
+import { connectFrom, watch } from "./tui/connect.js";
 import { startParallel } from "./tui/docker.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
-import { command, report, target } from "./tui/report.js";
+import { report } from "./tui/report.js";
 import { leaveScreen, out } from "./tui/terminal.js";
-import { cyan, green, yellow } from "./tui/text.js";
-import { duration, now } from "./time.js";
+import { green, yellow } from "./tui/text.js";
+import { duration } from "./time.js";
 import { canUpdate, checkUpdate, runUpdate, updateNotice, versionLines } from "./update.js";
 import { blockInternet, CLI, isFirewallOn, protocolPorts, PROTOCOLS, restoreFirewall, waitForLogin, windscribe, withPorts } from "./windscribe.js";
 import { worker } from "./worker.js";
@@ -27,6 +28,9 @@ Find which Windscribe locations and protocols work from your network, ranked by 
 Without -c it opens an interactive country picker (your selection is remembered).
 Each scan's working connections are saved: the scanning type (-o, or o in the picker) can try
 them first or only them, and windscout connect connects to the best of them that still works.
+In a terminal, windscout then watches the connection (also after the connect prompt at the end of
+a scan): when it drops, it connects again, to the same one or the next. q stops watching, and so
+does disconnecting or switching location in the app.
 
 Options:
   -c, --countries LIST  comma-separated ISO codes, city names or nicknames (skips the picker)
@@ -39,7 +43,9 @@ ${SPEED_TEST ? "  -n, --no-speed        connect-only: skip the download test, ra
                         result's working connections among them first, then the rest) or last-only (only those,
                         whatever -c and -p say; needs no -c)
   -w, --stop-at-first   stop at the first working connection that holds up: a speed test (even with -n) of at least
-                        ${MIN_MBPS} Mbps, then about 10 more seconds connected, with internet through it
+                        ${MIN_MBPS} Mbps, staying connected with internet through it (-H), a speed test again, and a reconnect
+  -H, --hold SEC        with -w: seconds each working connection has to stay connected, at least ${MIN_HOLD}
+                        (default: saved, or ${DEFAULT_HOLD})
   -d, --docker          scan in parallel, in docker containers (one per attempt, up to 16, as docker's CPUs and memory allow)
   -v, --version         show the installed version (and offer to update if a newer one is out)
   -h, --help            show this help
@@ -63,37 +69,28 @@ const ask = (question: string, instant: string[] = []) => new Promise<string | n
   rl.question(question, (a) => (resolve(a.trim()), rl.close()));
 });
 
-/** Runs a result's connect command and checks it as the scan does: connected, on its port, with internet through it.
- * True once it is; otherwise disconnects (and waits until the app has), so the next connect isn't swallowed */
-async function connectTo(r: Result, timeout: number): Promise<boolean> {
-  console.log(cyan(command(r)));
-  const t = now(), { status, location } = await attempt(target(r), r.protocol, { timeout, speedTest: false });
-  if (status === "ok") return console.log(green(`Connected: ${location}`)), true;
-  console.log(yellow(`${status} after ${duration(now() - t)}`));
-  await disconnect();
-  return false;
-}
-
-/** Asks which numbered connection to make (enter: the best), then runs its command and waits for it to connect.
- * 0 and q need no enter; the other numbers do, since 1 may be the start of 10 */
+/** Asks which numbered connection to make (enter: the best), then connects to it, or when it doesn't connect, to the next
+ * ones, and watches it. 0 and q need no enter; the other numbers do, since 1 may be the start of 10 */
 async function offerConnect(choices: Result[], timeout: number): Promise<void> {
   const others = choices.length > 2 ? `, 1-${choices.length - 1} = other` : choices.length > 1 ? ", 1 = other" : "";
   for (;;) {
     const a = await ask(`\nconnect to # (enter or 0 = best${others}, q = quit): `, ["0", "q"]);
     if (a === null || /^q(uit)?$/i.test(a)) return;
-    const r = a === "" ? choices[0] : /^\d+$/.test(a) ? choices[Number(a)] : undefined;
-    if (!r) {
+    const n = a === "" ? 0 : /^\d+$/.test(a) ? Number(a) : -1;
+    if (!choices[n]) {
       console.log(yellow(`no #${a} in the tables`));
       continue;
     }
-    await connectTo(r, timeout);
+    const i = await connectFrom(choices, n, timeout);
+    if (i < 0) console.log(yellow(`\nnone of them connects now: ${RESCAN_HINT}`));
+    else await watch(choices, i, timeout);
     return;
   }
 }
 
 const RESCAN_HINT = "rescan them with windscout -o last-only, or start a new scan";
 
-/** windscout connect: the last result's connections, best first, until one connects */
+/** windscout connect: the last result's connections, best first, until one connects; then, in a terminal, watches it */
 async function connectLast(timeout: number): Promise<void> {
   const last = loadLast();
   if (!last) {
@@ -103,12 +100,11 @@ async function connectLast(timeout: number): Promise<void> {
   }
   await waitForLogin();
   await disconnect(); // a connection already up would read as the first one connecting
-  for (const [i, r] of last.results.entries()) {
-    console.log(`\n${i + 1}/${last.results.length} ${r.location || r.query} over ${r.protocol}`);
-    if (await connectTo(r, timeout)) return;
-  }
-  console.log(yellow(`\nnone of the last result's ${last.results.length} connection${last.results.length === 1 ? "" : "s"} works now: ${RESCAN_HINT}`));
-  process.exitCode = 1;
+  const i = await connectFrom(last.results, 0, timeout);
+  if (i < 0) {
+    console.log(yellow(`\nnone of the last result's ${last.results.length} connection${last.results.length === 1 ? "" : "s"} works now: ${RESCAN_HINT}`));
+    process.exitCode = 1;
+  } else if (process.stdin.isTTY && out.isTTY) await watch(last.results, i, timeout);
 }
 
 /** u in the picker: update, then run the new version in this one's place, with the same arguments */
@@ -138,6 +134,7 @@ async function main(): Promise<void> {
       firewall: { type: "boolean", short: "f", default: false },
       order: { type: "string", short: "o" },
       "stop-at-first": { type: "boolean", short: "w", default: false },
+      hold: { type: "string", short: "H" },
       random: { type: "boolean", short: "r", default: false }, // from before scanning types: -o random
       docker: { type: "boolean", short: "d", default: false },
       worker: { type: "boolean", default: false }, // in a parallel scan's container
@@ -161,6 +158,8 @@ async function main(): Promise<void> {
   }
   let timeout = a.timeout ? Number(a.timeout) : undefined;
   if (timeout !== undefined && !(timeout >= MIN_TIMEOUT)) throw new Error(`--timeout must be at least ${MIN_TIMEOUT} seconds`);
+  let hold = a.hold ? Number(a.hold) : undefined;
+  if (hold !== undefined && !(hold >= MIN_HOLD)) throw new Error(`--hold must be at least ${MIN_HOLD} seconds`);
   if (a.order !== undefined && !ORDERS.includes(a.order as Order)) throw new Error(`--order must be one of: ${ORDERS.join(", ")}`);
   if (subcommand === "connect") return connectLast(timeout ?? loadConfig()?.timeout ?? DEFAULT_TIMEOUT);
 
@@ -187,6 +186,7 @@ async function main(): Promise<void> {
       firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
       order: order ?? saved?.order ?? "default",
       stopAtFirst: stopAtFirst || (saved?.stopAtFirst ?? false),
+      hold: hold ?? saved?.hold ?? DEFAULT_HOLD,
       allPorts: allPorts || (saved?.allPorts ?? false),
       docker: docker || (saved?.docker ?? false),
       last,
@@ -199,6 +199,7 @@ async function main(): Promise<void> {
     firewall = choice.firewall;
     order = choice.order;
     stopAtFirst = choice.stopAtFirst;
+    hold = choice.hold;
     allPorts = choice.allPorts;
     timeout = choice.timeout;
     docker = choice.docker;
@@ -206,6 +207,7 @@ async function main(): Promise<void> {
   countries ??= [];
   protocols ??= PROTOCOLS;
   timeout ??= DEFAULT_TIMEOUT;
+  hold ??= DEFAULT_HOLD;
   order ??= "default";
   const byLast = order === "last-first" || order === "last-only"; // a type by the last result: it needs a saved scan
   if (byLast && !last) throw new Error(`no saved scan yet: -o ${order} needs one, so run a scan with another scanning type first`);
@@ -237,7 +239,7 @@ async function main(): Promise<void> {
     }
     await windscribe("disconnect"); // a VPN connection here would carry the containers' traffic too
   }
-  const scan = new Scan(countries, scanned.filter((p) => !skipped.has(p)), { timeout, speedTest, only: inContainers(), stopAtFirst }, probers);
+  const scan = new Scan(countries, scanned.filter((p) => !skipped.has(p)), { timeout, speedTest, only: inContainers(), stopAtFirst: stopAtFirst ? hold : 0 }, probers);
   // not with containers: their traffic goes out through this computer, and the firewall would block it
   const blocking = firewall && !docker && (await blockInternet());
   const view = tty ? showProgress(scan, blocking) : logProgress(scan);
@@ -247,8 +249,11 @@ async function main(): Promise<void> {
   view.close();
   for (const e of new Set(scan.errors)) console.error(yellow(e));
   if (skipped.size) console.error(yellow(`not tried: ${[...skipped].join(", ")}, which the docker containers can't run (a scan without --docker can)`));
-  if (scan.found) console.log(green("stopped at the first connection that held up (a speed test, then staying up)"));
+  if (scan.found) console.log(green(`stopped at the first connection that held up: a speed test, ${duration(hold)} connected, a speed test again and a reconnect`));
   else if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
+  // a slower one is never stopped at, so it isn't checked
+  else if (stopAtFirst && scan.results.some((r) => r.status === "ok"))
+    console.log(yellow(`none held up at ${MIN_MBPS} Mbps or more: the connections below are slower, and weren't checked for stability`));
   const choices = report(scan.results, scan.protocols, { all: a.all, speedTest: speedTest || stopAtFirst }); // stop at the first measures speed
   // its working connections replace the saved ones it tried, so what stopped working drops out; the saved ones it didn't try
   // (other countries, or what a stopped scan didn't get to) stay, after its own; a scan where nothing worked keeps the last

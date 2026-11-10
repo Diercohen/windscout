@@ -1,9 +1,9 @@
-// Screen 1: pick countries, protocols, all ports, speed test, firewall, timeout, docker, the scanning type and stop at the
-// first working connection, by keyboard or mouse.
+// Screen 1: pick countries, protocols, all ports, speed test, firewall, timeout, docker, the scanning type, and stop at the
+// first working connection and how long it has to hold up, by keyboard or mouse.
 import type { Key } from "node:readline";
-import { loadDockerWireGuard, MIN_TIMEOUT, saveConfig, SPEED_TEST, type Choice, type Last } from "../config.js";
+import { loadDockerWireGuard, MIN_HOLD, MIN_TIMEOUT, saveConfig, SPEED_TEST, type Choice, type Last } from "../config.js";
 import { dockerState, loginSeconds, notInContainers, workerCount, type DockerState } from "../docker.js";
-import { STEADY_SECONDS } from "../probe.js";
+import { steadySeconds } from "../probe.js";
 import { attemptSeconds, estimate, ORDERS, plan, type Order } from "../scan.js";
 import { duration } from "../time.js";
 import { canUpdate, checkUpdate, versionLines } from "../update.js";
@@ -20,6 +20,7 @@ export interface PickerOptions {
   firewall: boolean;
   order: Order;
   stopAtFirst: boolean;
+  hold: number;
   allPorts: boolean;
   docker: boolean;
   last: Last | null; // the last scan's working connections, for the scanning types that use them
@@ -38,6 +39,7 @@ interface Hits {
   dockerRow: number;
   orderRow: number;
   stopRow: number;
+  holdRow: number;
   searchRow: number;
   firstRow: number; // first country row
   shown: number; // country rows on screen
@@ -64,11 +66,12 @@ const ago = (ms: number) => {
 };
 
 /** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
-export function pick(saved: Choice | null, { timeout, speedTest, firewall, order, stopAtFirst, allPorts, docker, last }: PickerOptions): Promise<Choice | null | "update"> {
+export function pick(saved: Choice | null, { timeout, speedTest, firewall, order, stopAtFirst, hold, allPorts, docker, last }: PickerOptions): Promise<Choice | null | "update"> {
   const selected = new Set(saved?.countries ?? []);
   const protos = new Set(saved?.protocols.length ? saved.protocols : PROTOCOLS);
   let cursor = 0, top = 0, message = "", query = "", searching = false;
-  let seconds = String(timeout), editing = false; // the timeout, as typed
+  const typed = { timeout: String(timeout), hold: String(hold) }; // the settings in seconds, as typed
+  let editing: keyof typeof typed | null = null; // the one being typed
   let dockerAt: DockerState | null = null, inDialog = false; // docker's state once checked; a docker dialog has the screen
   let portLists: ReadonlyMap<string, number[]> | null = null; // each protocol's ports, once the app said
   let starting = -1; // once start is pressed: the start button's spinner frame, until the next screen shows
@@ -97,11 +100,12 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       const version = versionLines(true);
       const off = order === "last-only"; // only the saved connections: the countries, protocols and ports are skipped
       const missing = needsLast(order) && !last; // a type by the last result, and no saved scan: start is off
-      timeout = Number(seconds);
+      timeout = Number(typed.timeout);
+      hold = Number(typed.hold);
       const { list, skipped } = todo(), n = list.length;
       // only the last results lists the countries it scans, all selected; the user's own selection is back with the other types
       const matches = off ? [...new Set(list.map((a) => a.country))] : visible();
-      const height = Math.max(3, rows - 24 - version.length);
+      const height = Math.max(3, rows - 25 - version.length);
       if (!off) { // so the selection's list keeps its cursor and scroll for then
         cursor = Math.max(0, Math.min(cursor, matches.length - 1));
         if (cursor < top) top = cursor;
@@ -131,8 +135,10 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       const fwLine = `${dim(under("f"))} ${firewall ? green("● " + fwLabel) : dim("○ " + fwLabel)}  ${dim(docker
         ? "not used with docker"
         : firewall ? "only VPN traffic gets through" : "off: apps may leak in between")}`;
-      const short = timeout < MIN_TIMEOUT;
-      const timeoutLine = `${dim(under("t"))} timeout ${editing ? bold(seconds) + cyan("▏") : (short ? yellow : bold)(seconds || "?")} s  ${dim(`per connection · at least ${MIN_TIMEOUT}`)}`;
+      // a setting in seconds: as typed, with the cursor while typing, yellow when it's under its least
+      const field = (k: keyof typeof typed, least: number) =>
+        editing === k ? bold(typed[k]) + cyan("▏") : (Number(typed[k]) < least ? yellow : bold)(typed[k] || "?");
+      const timeoutLine = `${dim(under("t"))} timeout ${field("timeout", MIN_TIMEOUT)} s  ${dim(`per connection · at least ${MIN_TIMEOUT}`)}`;
       const dockerLabel = "parallel scan in docker containers";
       const dockerLine = `${dim(under("d"))} ${docker ? green("● " + dockerLabel) : dim("○ " + dockerLabel)}  ${dim(!docker
         ? "off: one attempt at a time"
@@ -151,8 +157,11 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       const lead = list[0]?.saved ? list[0] : null;
       const stopLine = `${dim(under("w"))} ${stopAtFirst ? green("● " + stopLabel) : dim("○ " + stopLabel)}  ${dim(!stopAtFirst
         ? "off: tries every attempt"
-        : lead ? `≈ ${duration(login + STEADY_SECONDS)} if ${lead.country} ${lead.protocol} still holds up`
-        : "after a speed and stability check")}`;
+        : lead ? `≈ ${duration(login + steadySeconds(hold))} if ${lead.country} ${lead.protocol} still holds up`
+        : `≈ ${duration(steadySeconds(hold))} of checks per working one`)}`;
+      const holdLine = `${dim(under("h"))} hold ${field("hold", MIN_HOLD)} s  ${dim(stopAtFirst
+        ? `each working one stays connected this long · at least ${MIN_HOLD}`
+        : "not used: stop at the first is off")}`;
       const search = off
         ? yellow("the last results' countries: only these are scanned")
         : searching ? `${cyan("🔍")} ${bold(query)}${cyan("▏")}`
@@ -174,7 +183,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       ];
       const buttonLine = buttons.map(([id, label]) => (id === "start" && n && !missing ? bold(cyan(`[ ${label} ]`)) : dim(`[ ${label} ]`))).join("  ");
 
-      const settings = [protoLine, portsLine, ...(SPEED_TEST ? [speedLine] : []), fwLine, timeoutLine, dockerLine, orderLine, stopLine];
+      const settings = [protoLine, portsLine, ...(SPEED_TEST ? [speedLine] : []), fwLine, timeoutLine, dockerLine, orderLine, stopLine, holdLine];
       const table = grid([{ title: "" }, { title: "Code" }, { title: "Country" }], body,
         { caption: search, captionRight: dim(range), minWidth: Math.max(...settings.map(vw)) + 4 });
       const width = vw(table[0]);
@@ -195,10 +204,12 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
           ? yellow("no saved scan yet, so start is off: press o for another scanning type")
           : !n ? yellow(skipped.length ? `the docker containers can't run ${skipped.join(" or ")}: d turns docker off`
             : `select at least one country and one protocol${last ? ", or o for only the last results" : ""}`)
-          : stopAtFirst // it can end at any attempt: this is when none holds up
-          ? `up to ${bold(String(n))} attempts · at most ${bold("≈ " + duration(total))} ${costs}`
+          : stopAtFirst // it can end at any attempt, and each working one adds its checks (the w line)
+          ? `up to ${bold(String(n))} attempts · ${bold("≈ " + duration(total))} if none connects ${costs}`
           : `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(total))} ${costs}`, width),
-        centerIn(dim(editing
+        centerIn(dim(editing === "hold"
+          ? "type the seconds each working connection has to stay connected · enter/esc done"
+          : editing
           ? "type the seconds to wait for each connection · enter/esc done"
           : searching
           ? "type to filter · ↑↓ move · enter/esc done"
@@ -227,7 +238,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       });
       hit = {
         protoRow: row(protoLine), protoHits, portsRow: row(portsLine), speedRow: SPEED_TEST ? row(speedLine) : -1,
-        firewallRow: row(fwLine), timeoutRow: row(timeoutLine), dockerRow: row(dockerLine), orderRow: row(orderLine), stopRow: row(stopLine),
+        firewallRow: row(fwLine), timeoutRow: row(timeoutLine), dockerRow: row(dockerLine), orderRow: row(orderLine), stopRow: row(stopLine), holdRow: row(holdLine),
         searchRow: at.top + head.length + 1,
         firstRow: at.top + head.length + 5, shown: shown.length,
         buttonRow: at.top + head.length + table.length + 1, buttonHits,
@@ -257,6 +268,10 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
         message = `the timeout must be at least ${MIN_TIMEOUT} seconds`;
         return false;
       }
+      if (stopAtFirst && !(hold >= MIN_HOLD)) {
+        message = `the hold must be at least ${MIN_HOLD} seconds`;
+        return false;
+      }
       // keep the user's order of preference stable: list order
       const choice: Choice = {
         countries: COUNTRIES.filter((c) => selected.has(c)),
@@ -265,6 +280,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
         firewall,
         order,
         stopAtFirst,
+        hold,
         allPorts,
         timeout,
         docker,
@@ -308,10 +324,11 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       else if (m.button === 65) cursor = Math.min(matches.length - 1, cursor + 3); // wheel down
       else if (m.button !== 0) return; // left button only
       else if (off && (onCountries || y === hit.protoRow || y === hit.portsRow)) message = SKIPPED;
-      else if (y === hit.searchRow) searching = true, editing = false;
-      else if (y === hit.timeoutRow) editing = true, searching = false;
+      else if (y === hit.searchRow) searching = true, editing = null;
+      else if (y === hit.timeoutRow) editing = "timeout", searching = false;
+      else if (y === hit.holdRow) editing = "hold", searching = false;
       else {
-        searching = editing = false; // clicking anywhere else ends typing, like leaving a text field
+        searching = false, editing = null; // clicking anywhere else ends typing, like leaving a text field
         if (y >= hit.firstRow && y < hit.firstRow + hit.shown) {
           cursor = top + (y - hit.firstRow);
           const c = matches[cursor];
@@ -358,9 +375,10 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       else if (k === "pageup") cursor = Math.max(0, cursor - 10);
       else if (k === "pagedown") cursor = Math.min(matches.length - 1, cursor + 10);
       else if (editing) {
-        if (k === "return" || k === "escape") editing = false;
-        else if (k === "backspace") seconds = seconds.slice(0, -1);
-        else if (/^[0-9]$/.test(str ?? "") && seconds.length < 4) seconds = seconds === "0" ? str! : seconds + str;
+        const text = typed[editing];
+        if (k === "return" || k === "escape") editing = null;
+        else if (k === "backspace") typed[editing] = text.slice(0, -1);
+        else if (/^[0-9]$/.test(str ?? "") && text.length < 4) typed[editing] = text === "0" ? str! : text + str;
       } else if (searching) {
         // typing goes into the search box; letters are not shortcuts here
         if (k === "return" || k === "escape") searching = false;
@@ -378,7 +396,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       else if (k === "p") allPorts = !allPorts;
       else if (k === "s" && SPEED_TEST) speedTest = !speedTest;
       else if (k === "f") firewall = !firewall;
-      else if (k === "t") editing = true, seconds = "";
+      else if (k === "t") editing = "timeout", typed.timeout = "";
+      else if (k === "h") editing = "hold", typed.hold = "";
       else if (k === "d") return void toggleDocker();
       else if (k === "o") cycleOrder();
       else if (k === "w") stopAtFirst = !stopAtFirst;

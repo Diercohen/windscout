@@ -12,6 +12,8 @@ export const SPEED_TEST = true;
 
 export const DEFAULT_TIMEOUT = 15;
 export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that would have worked
+export const DEFAULT_HOLD = 30;
+export const MIN_HOLD = 10; // seconds; shorter says little about how long a connection lasts
 
 export const CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "windscout", "config.json");
 const DOCKER_FILE = join(dirname(CONFIG), "docker.json"); // what the last parallel scan found its containers can do
@@ -25,6 +27,7 @@ export interface Choice {
   firewall: boolean; // block internet while scanning
   order: Order; // the scanning type: what the scan tries, in which order
   stopAtFirst: boolean; // stop at the first working connection that holds up
+  hold: number; // seconds each working connection has to hold up, for stop at the first
   allPorts: boolean; // each protocol on every port it has, not just its default
   timeout: number; // seconds to wait for each connection
   docker: boolean; // parallel scan in docker containers
@@ -41,6 +44,7 @@ export function loadConfig(): Choice | null {
       firewall: c.firewall === true,
       order: ORDERS.includes(c.order) ? c.order : c.random === true ? "random" : "default", // before scanning types: random on or off
       stopAtFirst: c.stopAtFirst === true,
+      hold: c.hold >= MIN_HOLD ? c.hold : DEFAULT_HOLD,
       allPorts: c.allPorts === true,
       timeout: c.timeout >= MIN_TIMEOUT ? c.timeout : DEFAULT_TIMEOUT,
       docker: c.docker === true,

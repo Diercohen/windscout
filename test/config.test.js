@@ -26,8 +26,11 @@ test("a saved choice is kept: speed test, scanning type (random on, from before,
   const c = loadConfig();
   assert.equal(c.speed, true);
   assert.deepEqual([c.countries, c.protocols, c.order, c.stopAtFirst, c.timeout], [["DE"], ["tcp"], "random", false, 20]);
-  writeFileSync(CONFIG, JSON.stringify({ order: "last-only", stopAtFirst: true }));
-  assert.deepEqual([loadConfig().order, loadConfig().stopAtFirst], ["last-only", true]);
+  assert.equal(c.hold, 30); // saved before the hold: its default
+  writeFileSync(CONFIG, JSON.stringify({ order: "last-only", stopAtFirst: true, hold: 120 }));
+  assert.deepEqual([loadConfig().order, loadConfig().stopAtFirst, loadConfig().hold], ["last-only", true, 120]);
+  writeFileSync(CONFIG, JSON.stringify({ hold: 5 })); // under the least
+  assert.equal(loadConfig().hold, 30);
   writeFileSync(CONFIG, JSON.stringify({ order: "sideways" }));
   assert.equal(loadConfig().order, "default");
 });
