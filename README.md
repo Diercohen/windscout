@@ -116,7 +116,7 @@ Run `windscout` with no arguments to open the interactive picker:
 
 Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
-After you start, the Start button spins (`[ ⠋ Starting… ]`) until the scan's screen shows, which can take a moment when it turns the firewall on or starts docker. While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter to connect to the best one, type another one's number to connect to that, or `q` to quit.
+After you start, the Start button spins (`[ ⠋ Starting… ]`) until the scan's screen shows, which can take a moment when it turns the firewall on or starts docker. While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter or `0` to connect to the best one, type another one's number and press enter to connect to that, or press `q` to quit. `0` and `q` work right away, without enter.
 
 ### Non-interactive
 
@@ -164,7 +164,7 @@ Press `o` in the picker, or pass `-o`, to choose what a scan tries and in which 
 | default | `default` | the selected countries × protocols, the countries in list order |
 | by random country | `random` | the same, with the countries shuffled, a new order each run |
 | by last success result first | `last-first` | the same, but the [last result](#last-result-rescan-and-connect)'s working connections among them go first, best first and on their own port, then the rest. With one country selected, only that country is scanned, its saved connections first. The line shows how many saved connections are in your selection (`1 of 7 saved selected · 3h ago`) |
-| only the last results | `last-only` | only the last result's working connections, each on its own protocol and port. The countries, protocols and all ports are skipped, so the picker greys them out and locks them (your selection stays for next time). With `-o last-only`, `-c` isn't needed |
+| only the last results | `last-only` | only the last result's working connections, each on its own protocol and port. The countries, protocols and all ports are skipped, so the picker greys them out and locks them. Its country list shows just the countries this scan tries, all selected; your own selection comes back when you change the type, and stays for next time. With `-o last-only`, `-c` isn't needed |
 
 The two types by the last result need a saved scan. Until there is one, choosing either turns `[ ▶ Start ]` off (greyed out), and a warning takes the estimate's place: `no saved scan yet, so start is off: press o for another scanning type`. Without the picker, `-o last-first` and `-o last-only` stop with an error instead. The estimate counts each saved connection once: `tcp` and `tcp:443` are the same attempt when 443 is tcp's default port.
 
@@ -198,7 +198,7 @@ Both modes show an **availability grid**: one row per country, and ✓ / ✗ for
 ╰─────────────────────────┴────────────────────────┴─────────┴───────────┴─────╯
 ```
 
-While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. Press `p` (or `space`) to pause: the current attempt finishes, the VPN disconnects, and the scan waits until you press `p` again. Paused time doesn't count toward elapsed or remaining. In connect-only mode the scan starts on the availability grid.
+While scanning, press `tab` to switch between the availability grid and the speed or latency ranking. Press `p` (or `space`) to pause: the current attempt finishes, the VPN disconnects, and the scan waits until you press `p` again. Paused time doesn't count toward elapsed or remaining. The scan starts on the ranking (*Working so far*) until you switch: then the next scans start on the table you left it on (saved to `~/.config/windscout/view.json`).
 
 ## All ports
 
@@ -248,7 +248,7 @@ Then the first parallel scan builds a local image, `windscout-worker`, with Node
 
 The mirrors come from [Mirava](https://github.com/MiravaOrg/Mirava)'s list of mirrors in Iran; they come and go, and that's where to look for new ones.
 
-**Kernel check:** each container first checks that docker's Linux kernel gives it what Windscribe needs: a tunnel device (tun) and a firewall (nftables). If not, the scan stops and says so, rather than showing every location as blocked. Windscribe's WireGuard also needs nftables' `fib` in its firewall table, which Docker Desktop's own Linux VM lacks (on macOS, and on Windows without WSL 2). There, WireGuard runs on this computer instead (see below).
+**Kernel check:** each container first checks that docker's Linux kernel gives it what Windscribe needs: a tunnel device (tun) and a firewall (nftables). If not, the scan stops and says so, rather than showing every location as blocked. Windscribe's WireGuard also needs nftables' `fib` in its firewall table, which Docker Desktop's own Linux VM lacks (on macOS, and on Windows without WSL 2). There, a parallel scan skips WireGuard (see below).
 
 **Login:** the containers' Windscribe apps log in with the session that the Windscribe app on this computer is logged in with, so they never log in with your password. Windscribe locks an account that logs in many times at once, and a login per container would do that. WindScout reads the session from the app's settings (`~/.config/Windscribe/Windscribe2.conf` on Linux, the `com.windscribe.Windscribe2` defaults on macOS, `HKEY_CURRENT_USER\Software\Windscribe\Windscribe2` in the registry on Windows) and hands it to each container on its standard input, not on a command line, where other programs could see it. Each container's docker volume (`windscout-1`, `windscout-2`, …) keeps its app's settings for the next scans, with the WireGuard keys it registered with your account. A volume that another account used starts over. If you log out of the Windscribe app, the containers' session ends too, and the next scan gives them the new one.
 
@@ -260,7 +260,7 @@ WindScout 0.6.0 asked for your username and password instead, and could save the
 
 **Differences from a normal scan:**
 
-- IKEv2, and WireGuard when the kernel check finds it can't run in the containers, are tried on this computer once the containers are done, one at a time like a normal scan. The scan screen shows them on a line of their own (`this computer`), and the picker's estimate counts them. Windscribe's Linux app has no IKEv2.
+- The containers do the whole scan: nothing runs on this computer. What they can't run is skipped: IKEv2 (Windscribe's Linux app has none), and WireGuard when the kernel check finds it can't run in the containers. The picker's docker line says so (`ikev2 skipped`), its estimate leaves them out, and a line after the scan lists them. To try them, scan without docker. If every container stops, the scan ends there, with what they found, and says why.
 - This computer's own Windscribe connection is disconnected at the start and stays off while the containers scan, since it would carry their traffic too.
 - No firewall: "block internet while scanning" isn't used, since it would block the containers' traffic too.
 

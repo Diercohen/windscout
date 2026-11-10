@@ -1,4 +1,5 @@
-// The picker's selection, what the last parallel scan found its containers can do, and the last scan's working results, remembered between runs.
+// The picker's selection, what the last parallel scan found its containers can do, the last scan's working results, and the
+// scan screen's table, remembered between runs.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,6 +16,7 @@ export const MIN_TIMEOUT = 10; // seconds; shorter cuts off connections that wou
 export const CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "windscout", "config.json");
 const DOCKER_FILE = join(dirname(CONFIG), "docker.json"); // what the last parallel scan found its containers can do
 export const LAST_FILE = join(dirname(CONFIG), "last.json"); // the last scan's working connections
+const VIEW_FILE = join(dirname(CONFIG), "view.json"); // the table the scan screen was left on
 
 export interface Choice {
   countries: string[];
@@ -68,6 +70,25 @@ export function saveDockerWireGuard(wireguard: boolean): void {
   try {
     mkdirSync(dirname(DOCKER_FILE), { recursive: true });
     writeFileSync(DOCKER_FILE, JSON.stringify({ wireguard }) + "\n");
+  } catch {} // not being able to remember isn't worth failing the scan
+}
+
+/** The scan screen's table: the ranking ("Working so far") or the availability grid; tab switches it */
+export type View = "ranking" | "availability";
+
+/** The table the last scan was left on; the ranking until the user switches */
+export function loadView(): View {
+  try {
+    return JSON.parse(readFileSync(VIEW_FILE, "utf8")).view === "availability" ? "availability" : "ranking";
+  } catch {
+    return "ranking";
+  }
+}
+
+export function saveView(view: View): void {
+  try {
+    mkdirSync(dirname(VIEW_FILE), { recursive: true });
+    writeFileSync(VIEW_FILE, JSON.stringify({ view }) + "\n");
   } catch {} // not being able to remember isn't worth failing the scan
 }
 

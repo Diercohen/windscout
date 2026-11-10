@@ -1,5 +1,6 @@
 // Screen 2: a running scan, live on the full screen, or as plain lines when there is no terminal.
 import type { Key } from "node:readline";
+import { loadView, saveView } from "../config.js";
 import { sortOk } from "../probe.js";
 import { attemptSeconds, type Scan, type ScanHooks, type Slot } from "../scan.js";
 import { duration, now } from "../time.js";
@@ -16,13 +17,13 @@ export interface ScanView extends ScanHooks {
   close(): void;
 }
 
-/** Progress bar, current attempt, results so far. tab switches the table, p pauses, q stops (twice: quits).
+/** Progress bar, current attempt, results so far. tab switches the table (the next scans start on it), p pauses, q stops (twice: quits).
  * blocking: we turned the firewall on for the scan */
 export function showProgress(scan: Scan, blocking: boolean): ScanView {
   const { protocols, options: { timeout } } = scan;
   const speedTest = scan.options.speedTest || Boolean(scan.options.stopAtFirst); // stop at the first measures speed too
   let quitting = false; // q pressed: a second one quits right away
-  let view: "ranking" | "availability" = speedTest ? "ranking" : "availability"; // tab switches
+  let view = loadView(); // tab switches, and saves it for the next scans
   let frame = 0;
 
   const render = () => {
@@ -70,8 +71,8 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
       : "";
     const pausing = paused && !waiting && frame % 8 < 5;
     const slotLine = (s: Slot) => {
-      if (!s.current) return s.step ? ` ${red("✗")} ${dim(clip(s.step, inner - 3))}` : dim(s.name ? ` · ${s.name}: after the containers` : " · idle");
-      const head = ` ${cyan(spinner)} ${s.name ? dim(`${s.name}: `) : ""}${bold(attempt(s))} `, time = ` · ${duration(now() - s.attemptStart)}`;
+      if (!s.current) return s.step ? ` ${red("✗")} ${dim(clip(s.step, inner - 3))}` : dim(" · idle");
+      const head = ` ${cyan(spinner)} ${bold(attempt(s))} `, time = ` · ${duration(now() - s.attemptStart)}`;
       return head + dim(clip(s.step, inner - vw(head) - time.length) + time);
     };
     const panel = box([
@@ -108,6 +109,7 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
   input.on("keypress", async (_str: string | undefined, key: Key = {}) => {
     if (key.name === "tab") {
       view = view === "ranking" ? "availability" : "ranking";
+      saveView(view);
       render();
     } else if (key.name === "p" || key.name === "space") {
       scan.togglePause();

@@ -23,19 +23,11 @@ export interface ScanHooks {
   result?(r: Result): void;
 }
 
-/** Attempts the slots can't make (protocols): they run through prober once the slots are done, one at a time */
-export interface After {
-  prober: Prober;
-  protocols: ReadonlySet<string>;
-  name: string; // for its slot in the views
-}
-
 /** What a slot is doing, for the views */
 export interface Slot {
   current: { country: string; protocol: string } | null;
   step: string; // what the running attempt is doing; once current stays null, why the slot stopped
   attemptStart: number;
-  name?: string; // the after-slot's
 }
 
 export type Attempt = { country: string; protocol: string; saved?: boolean }; // saved: a working connection of the last result
@@ -84,10 +76,9 @@ export class Scan {
   private unpaused = Promise.resolve();
 
   constructor(readonly countries: readonly string[], readonly protocols: readonly string[], readonly options: ScanOptions,
-    private readonly probers: Prober[] = [probe], private readonly after?: After) {
+    private readonly probers: Prober[] = [probe]) {
     this.total = this.attempts().length;
     this.slots = probers.map(() => ({ current: null, step: "", attemptStart: now() }));
-    if (after) this.slots.push({ current: null, step: "", attemptStart: now(), name: after.name });
   }
 
   /** Seconds spent scanning, pauses not counted */
@@ -121,15 +112,13 @@ export class Scan {
     const queue = this.attempts();
     const left = new Map<string, number>(); // attempts to go, per country
     for (const { country } of queue) left.set(country, (left.get(country) ?? 0) + 1);
-    const later = this.after?.protocols ?? new Set();
-    await Promise.all(this.probers.map((prober, i) => this.work(prober, this.slots[i], (p) => !later.has(p), queue, left, hooks)));
-    // then the rest, also what slots whose container stopped left over
-    if (this.after) await this.work(this.after.prober, this.slots[this.probers.length], () => true, queue, left, hooks);
+    // when every slot's container stops, what they left isn't tried: scan.errors says why
+    await Promise.all(this.probers.map((prober, i) => this.work(prober, this.slots[i], queue, left, hooks)));
     return this.results;
   }
 
-  /** One slot: takes the attempts it can make from the queue, one at a time, until there are none */
-  private async work(prober: Prober, slot: Slot, can: (protocol: string) => boolean, queue: Attempt[], left: Map<string, number>, hooks: ScanHooks) {
+  /** One slot: takes the attempts from the queue, one at a time, until there are none */
+  private async work(prober: Prober, slot: Slot, queue: Attempt[], left: Map<string, number>, hooks: ScanHooks) {
     const { timeout, speedTest, stopAtFirst = false } = this.options;
     for (;;) {
       while (this.paused && !this.stopping) {
@@ -139,9 +128,8 @@ export class Scan {
         }
         await this.unpaused;
       }
-      const i = this.stopping ? -1 : queue.findIndex((a) => can(a.protocol));
-      if (i < 0) return;
-      const [next] = queue.splice(i, 1);
+      const next = this.stopping ? undefined : queue.shift();
+      if (!next) return;
       const { country, protocol } = next;
       Object.assign(slot, { current: next, step: "", attemptStart: now() });
       hooks.attempt?.(country, protocol);

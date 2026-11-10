@@ -1,4 +1,4 @@
-// The Windscribe login 0.6.0 saved, the saved choice and the last result, against the build: npm test
+// The Windscribe login 0.6.0 saved, the saved choice, the scan screen's table and the last result, against the build: npm test
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +30,21 @@ test("a saved choice is kept: speed test, scanning type (random on, from before,
   assert.deepEqual([loadConfig().order, loadConfig().stopAtFirst], ["last-only", true]);
   writeFileSync(CONFIG, JSON.stringify({ order: "sideways" }));
   assert.equal(loadConfig().order, "default");
+});
+
+test("the scan screen starts on the ranking until the user switches, then on the table it was left on", async () => {
+  const { loadView, saveView } = await import("../dist/config.js");
+  const file = join(dirname(CONFIG), "view.json");
+  rmSync(file, { force: true });
+  assert.equal(loadView(), "ranking");
+  saveView("availability");
+  assert.equal(loadView(), "availability");
+  saveView("ranking");
+  assert.equal(loadView(), "ranking");
+  writeFileSync(file, JSON.stringify({ view: "sideways" }));
+  assert.equal(loadView(), "ranking");
+  writeFileSync(file, "not json");
+  assert.equal(loadView(), "ranking");
 });
 
 test("the last result's working connections are saved best first, a scan keeps the ones it didn't try, and one where nothing worked keeps them all", async () => {

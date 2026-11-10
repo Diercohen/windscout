@@ -69,29 +69,13 @@ test("a pause waits for the running attempts, and doesn't count as elapsed", asy
   assert.equal(scan.done, 3);
 });
 
-test("protocols the slots can't make run after them, one at a time, and so does what dead slots leave", async () => {
-  const log = [];
-  const timed = (who, dies = () => false) => async (query, protocol) => {
-    const start = performance.now();
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    if (dies()) throw new Error(`${who} stopped`);
-    log.push({ who, protocol, start, end: performance.now() });
-    return { query, protocol, location: "", connectS: 1, latencyMs: 1, speedMbps: null, status: "ok" };
-  };
-  const here = { prober: timed("here"), protocols: new Set(["x"]), name: "this computer" };
-  const scan = new Scan(["DE", "NL", "FR"], ["a", "x"], OPTIONS, [timed("slot"), timed("slot")], here);
+test("a slot per container and no more, and when every container stops, the scan ends there and says why", async () => {
+  const tried = [];
+  const scan = new Scan(["DE", "NL"], ["a", "b"], OPTIONS, [fake(tried, () => true), fake(tried, () => true)]);
+  assert.equal(scan.slots.length, 2);
   await scan.run();
-  assert.equal(scan.done, 6);
-  const slots = log.filter((l) => l.who === "slot"), after = log.filter((l) => l.who === "here");
-  assert.deepEqual([slots.map((l) => l.protocol), after.map((l) => l.protocol)], [["a", "a", "a"], ["x", "x", "x"]]);
-  assert.ok(after[0].start >= Math.max(...slots.map((l) => l.end)));
-  after.forEach((l, i) => i && assert.ok(l.start >= after[i - 1].end));
-
-  log.length = 0; // every container stops: this computer does the rest
-  const dead = new Scan(["DE", "NL"], ["a", "x"], OPTIONS, [timed("slot", () => true)], here);
-  await dead.run();
-  assert.equal(dead.done, 4);
-  assert.deepEqual(log.map((l) => l.who), ["here", "here", "here", "here"]);
+  assert.deepEqual([scan.total, scan.done, scan.results.length, tried.length], [4, 0, 0, 2]);
+  assert.deepEqual([...new Set(scan.errors)], ["container 2 stopped: gone"]);
 });
 
 const pairs = (attempts) => attempts.map((a) => `${a.country} ${a.protocol}`);

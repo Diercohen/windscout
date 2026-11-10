@@ -8,7 +8,7 @@ import { parseArgs } from "node:util";
 import { CONFIG, DEFAULT_TIMEOUT, forgetLogin, LAST_FILE, loadConfig, loadDockerWireGuard, loadLast, MIN_TIMEOUT, saveDockerWireGuard, saveLast, SPEED_TEST } from "./config.js";
 import { notInContainers, stopWorkers } from "./docker.js";
 import { attempt, disconnect, MIN_MBPS, probe, type Result } from "./probe.js";
-import { ORDERS, plan, Scan, type After, type Order } from "./scan.js";
+import { ORDERS, plan, Scan, type Order } from "./scan.js";
 import { startParallel } from "./tui/docker.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
@@ -52,10 +52,14 @@ Examples: windscout -c DE,NL,TR -p stealth,tcp:443
 // "DE, NL,,TR" → ["DE", "NL", "TR"]
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
-const ask = (question: string) => new Promise<string | null>((resolve) => {
+/** The typed answer; one of instant is taken as soon as it's the whole answer, without enter */
+const ask = (question: string, instant: string[] = []) => new Promise<string | null>((resolve) => {
   const rl = createInterface({ input: process.stdin, output: out });
+  // runs after readline's own keypress listener, so rl.line has the key in it
+  const onKey = () => instant.includes(rl.line.toLowerCase()) && (out.write("\n"), resolve(rl.line), rl.close());
+  process.stdin.on("keypress", onKey);
   rl.on("SIGINT", () => rl.close()); // Ctrl-C / Ctrl-D: no answer, null
-  rl.on("close", () => resolve(null));
+  rl.on("close", () => (process.stdin.off("keypress", onKey), resolve(null)));
   rl.question(question, (a) => (resolve(a.trim()), rl.close()));
 });
 
@@ -70,11 +74,12 @@ async function connectTo(r: Result, timeout: number): Promise<boolean> {
   return false;
 }
 
-/** Asks which numbered connection to make (enter: the best), then runs its command and waits for it to connect */
+/** Asks which numbered connection to make (enter: the best), then runs its command and waits for it to connect.
+ * 0 and q need no enter; the other numbers do, since 1 may be the start of 10 */
 async function offerConnect(choices: Result[], timeout: number): Promise<void> {
   const others = choices.length > 2 ? `, 1-${choices.length - 1} = other` : choices.length > 1 ? ", 1 = other" : "";
   for (;;) {
-    const a = await ask(`\nconnect to # (enter or 0 = best${others}, q = quit): `);
+    const a = await ask(`\nconnect to # (enter or 0 = best${others}, q = quit): `, ["0", "q"]);
     if (a === null || /^q(uit)?$/i.test(a)) return;
     const r = a === "" ? choices[0] : /^\d+$/.test(a) ? choices[Number(a)] : undefined;
     if (!r) {
@@ -213,29 +218,38 @@ async function main(): Promise<void> {
   // the tables' columns: the protocols asked for, and the saved connections' own (only those, when only they are scanned)
   const scanned = [...new Set([...(order === "last-only" ? [] : protocols), ...attempts.map((x) => x.protocol)])];
 
-  let probers = [probe], after: After | undefined; // after: what runs here once the containers are done
-  const later = notInContainers(scanned, loadDockerWireGuard()); // as far as the last parallel scan knows
-  const inContainers = attempts.filter((x) => !later.has(x.protocol)).length;
-  if (docker && inContainers) {
-    const started = await startParallel(inContainers);
+  // a parallel scan is the containers' alone: the protocols they can't run (IKEv2, WireGuard on some kernels) aren't tried
+  let probers = [probe], skipped = new Set<string>();
+  const inContainers = () => attempts.filter((x) => !skipped.has(x.protocol));
+  const nothingLeft = () => new Error(`the docker containers can't run ${[...skipped].join(" or ")}, and nothing else is selected:`
+    + " scan without --docker (d in the picker)");
+  if (docker && attempts.length) {
+    skipped = notInContainers(scanned, loadDockerWireGuard()); // as far as the last parallel scan knows
+    if (!inContainers().length) throw nothingLeft();
+    const started = await startParallel(inContainers().length);
     if (!started) return leaveScreen();
     saveDockerWireGuard(started.wireguard);
     probers = started.probers;
-    after = { prober: probe, protocols: notInContainers(scanned, started.wireguard), name: "this computer" };
+    skipped = notInContainers(scanned, started.wireguard); // their kernel may not run WireGuard after all, or may now
+    if (!inContainers().length) {
+      await stopWorkers();
+      throw nothingLeft();
+    }
     await windscribe("disconnect"); // a VPN connection here would carry the containers' traffic too
   }
-  const scan = new Scan(countries, scanned, { timeout, speedTest, only: attempts, stopAtFirst }, probers, after);
+  const scan = new Scan(countries, scanned.filter((p) => !skipped.has(p)), { timeout, speedTest, only: inContainers(), stopAtFirst }, probers);
   // not with containers: their traffic goes out through this computer, and the firewall would block it
-  const blocking = firewall && !after && (await blockInternet());
+  const blocking = firewall && !docker && (await blockInternet());
   const view = tty ? showProgress(scan, blocking) : logProgress(scan);
   await scan.run(view);
-  if (after) await stopWorkers();
+  if (docker) await stopWorkers();
   await restoreFirewall();
   view.close();
   for (const e of new Set(scan.errors)) console.error(yellow(e));
+  if (skipped.size) console.error(yellow(`not tried: ${[...skipped].join(", ")}, which the docker containers can't run (a scan without --docker can)`));
   if (scan.found) console.log(green("stopped at the first connection that held up (a speed test, then staying up)"));
   else if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
-  const choices = report(scan.results, scanned, { all: a.all, speedTest: speedTest || stopAtFirst }); // stop at the first measures speed
+  const choices = report(scan.results, scan.protocols, { all: a.all, speedTest: speedTest || stopAtFirst }); // stop at the first measures speed
   // its working connections replace the saved ones it tried, so what stopped working drops out; the saved ones it didn't try
   // (other countries, or what a stopped scan didn't get to) stay, after its own; a scan where nothing worked keeps the last
   const tried = new Set(scan.results.filter((r) => r.status !== "interrupted").map((r) => `${r.query} ${r.protocol}`));

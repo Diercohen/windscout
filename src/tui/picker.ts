@@ -79,12 +79,15 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
   };
   const ports = (p: string) => (allPorts && portLists?.get(p)?.length) || 1; // attempts per country for the protocol
   const perCountry = (ps: Iterable<string>) => [...ps].reduce((n, p) => n + ports(p), 0);
-  // what start scans, in its order: as the CLI plans it, so the estimate counts the same attempts
+  const wireguard = loadDockerWireGuard(); // in docker containers, as the last parallel scan found
+  // what start scans, in its order: as the CLI plans it, so the estimate counts the same attempts. A parallel scan is the
+  // containers' alone: the protocols they can't run are skipped
   const todo = () => {
     const ps = PROTOCOLS.filter((p) => protos.has(p));
-    return plan(order, COUNTRIES.filter((c) => selected.has(c)), allPorts && portLists ? withPorts(ps, portLists) : ps, last?.results, portLists ?? undefined);
+    const all = plan(order, COUNTRIES.filter((c) => selected.has(c)), allPorts && portLists ? withPorts(ps, portLists) : ps, last?.results, portLists ?? undefined);
+    const cant = notInContainers(docker ? all.map((a) => a.protocol) : [], wireguard);
+    return { list: all.filter((a) => !cant.has(a.protocol)), skipped: [...new Set([...cant].map((p) => p.split(":")[0]))] };
   };
-  const wireguard = loadDockerWireGuard(); // in docker containers, as the last parallel scan found
   enterScreen();
 
   return new Promise((resolve) => {
@@ -92,23 +95,22 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       if (inDialog) return;
       const rows = out.rows || 24;
       const version = versionLines(true);
-      const matches = visible();
-      const height = Math.max(3, rows - 24 - version.length);
-      cursor = Math.max(0, Math.min(cursor, matches.length - 1));
-      if (cursor < top) top = cursor;
-      if (cursor >= top + height) top = cursor - height + 1;
-      top = Math.max(0, Math.min(top, matches.length - height));
-
       const off = order === "last-only"; // only the saved connections: the countries, protocols and ports are skipped
       const missing = needsLast(order) && !last; // a type by the last result, and no saved scan: start is off
       timeout = Number(seconds);
-      const list = todo(), n = list.length;
-      const base = (p: string) => p.split(":")[0]; // "wireguard:443" → "wireguard"
-      const scanned = new Set(list.map((a) => base(a.protocol)));
-      const here = PROTOCOLS.filter((p) => docker && scanned.has(p) && notInContainers(PROTOCOLS, wireguard).has(p)); // after the containers
-      const inContainers = list.filter((a) => !here.includes(base(a.protocol))).length;
-      const parallel = docker && dockerAt === "ready" && inContainers > 0;
-      const slots = parallel ? workerCount(inContainers) : 1;
+      const { list, skipped } = todo(), n = list.length;
+      // only the last results lists the countries it scans, all selected; the user's own selection is back with the other types
+      const matches = off ? [...new Set(list.map((a) => a.country))] : visible();
+      const height = Math.max(3, rows - 24 - version.length);
+      if (!off) { // so the selection's list keeps its cursor and scroll for then
+        cursor = Math.max(0, Math.min(cursor, matches.length - 1));
+        if (cursor < top) top = cursor;
+        if (cursor >= top + height) top = cursor - height + 1;
+        top = Math.max(0, Math.min(top, matches.length - height));
+      }
+      const from = off ? 0 : top; // the first row shown
+      const parallel = docker && dockerAt === "ready" && n > 0;
+      const slots = parallel ? workerCount(n) : 1;
       const login = parallel ? loginSeconds(slots) : 0; // the containers log in before the scan starts
 
       const protoLine = PROTOCOLS.map((p, i) =>
@@ -134,8 +136,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       const dockerLabel = "parallel scan in docker containers";
       const dockerLine = `${dim(under("d"))} ${docker ? green("● " + dockerLabel) : dim("○ " + dockerLabel)}  ${dim(!docker
         ? "off: one attempt at a time"
-        : dockerAt === "ready" ? `${slots} at a time${here.length ? ` · ${here.join(" and ")} here, after them` : ""}`
-        : dockerAt ? "docker isn't ready: start sets it up" : "checking docker…")}`;
+        : (dockerAt === "ready" ? `${slots} at a time` : dockerAt ? "docker isn't ready: start sets it up" : "checking docker…")
+          + (skipped.length ? ` · ${skipped.join(" and ")} skipped` : ""))}`;
       const saves = last ? plan("last-only", [], [], last.results, portLists ?? undefined).length : 0; // the saved connections, each once
       const firsts = list.filter((a) => a.saved).length; // those this scan tries first
       const orderLine = `${dim(under("o"))} scanning type ${bold(ORDER_NAMES[order])}  ${dim(missing
@@ -145,25 +147,25 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
         : order === "last-first" ? `${firsts} of ${saves} saved selected · ${ago(last!.at)}`
         : `${saves} saved working connection${saves === 1 ? "" : "s"} · ${ago(last!.at)}`)}`;
       const stopLabel = "stop at the first working connection";
-      // the best saved connection goes first (unless it waits for the containers): when it still holds up, the scan ends there
-      const lead = list[0]?.saved && !here.includes(base(list[0].protocol)) ? list[0] : null;
+      // the best saved connection goes first: when it still holds up, the scan ends there
+      const lead = list[0]?.saved ? list[0] : null;
       const stopLine = `${dim(under("w"))} ${stopAtFirst ? green("● " + stopLabel) : dim("○ " + stopLabel)}  ${dim(!stopAtFirst
         ? "off: tries every attempt"
         : lead ? `≈ ${duration(login + STEADY_SECONDS)} if ${lead.country} ${lead.protocol} still holds up`
         : "after a speed and stability check")}`;
       const search = off
-        ? yellow("countries skipped: only the last results are scanned")
+        ? yellow("the last results' countries: only these are scanned")
         : searching ? `${cyan("🔍")} ${bold(query)}${cyan("▏")}`
         : query ? `🔍 ${query}` : dim("🔍 press / to search");
-      const shown = matches.slice(top, top + height);
-      const range = matches.length > height ? `${top + 1}–${top + shown.length} of ${matches.length}` : `${matches.length} countries`;
+      const shown = matches.slice(from, from + height);
+      const range = matches.length > height ? `${from + 1}–${from + shown.length} of ${matches.length}` : `${matches.length} countries`;
       const body = shown.map((code, j) => {
         const current = !off && top + j === cursor;
-        const mark = selected.has(code) ? (off ? dim : green)("●") : dim("○");
+        const mark = off || selected.has(code) ? (off ? dim : green)("●") : dim("○");
         const name = `${flag(code)} ${countryName(code)}`;
         return [`${current ? cyan("❯") : " "} ${mark}`, current ? bold(code) : dim(code), current ? bold(cyan(name)) : off ? dim(name) : name];
       });
-      if (!body.length) body.push(["   ", "", dim("no country matches")]);
+      if (!body.length) body.push(["   ", "", dim(off ? "no saved scan yet" : "no country matches")]);
       const buttons: [Button, string][] = [
         ["start", starting < 0 ? "▶ Start" : `${spin(starting++)} Starting…`],
         ["all", under("A") + (query ? "ll shown" : "ll")],
@@ -178,10 +180,10 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
       const width = vw(table[0]);
       const head = box(settings, {
         title: bold(cyan("WindScout")),
-        right: `${(off ? dim : bold)(String(selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
+        right: `${(off ? dim : bold)(String(off ? matches.length : selected.size))}${dim(`/${COUNTRIES.length} selected`)}`,
         width: width - 4,
       });
-      const total = login + estimate(inContainers, timeout, slots) + estimate(n - inContainers, timeout);
+      const total = login + estimate(n, timeout, slots);
       const costs = dim(`(~${attemptSeconds(timeout)}s each${slots > 1 ? `, ${slots} at a time` : ""}${login ? `, + ~${duration(login)} login` : ""})`);
       const lines = [
         ...head,
@@ -191,7 +193,8 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
         "",
         centerIn(missing
           ? yellow("no saved scan yet, so start is off: press o for another scanning type")
-          : !n ? yellow(`select at least one country and one protocol${last ? ", or o for only the last results" : ""}`)
+          : !n ? yellow(skipped.length ? `the docker containers can't run ${skipped.join(" or ")}: d turns docker off`
+            : `select at least one country and one protocol${last ? ", or o for only the last results" : ""}`)
           : stopAtFirst // it can end at any attempt: this is when none holds up
           ? `up to ${bold(String(n))} attempts · at most ${bold("≈ " + duration(total))} ${costs}`
           : `${bold(String(n))} attempts · estimated ${bold("≈ " + duration(total))} ${costs}`, width),
@@ -246,7 +249,7 @@ export function pick(saved: Choice | null, { timeout, speedTest, firewall, order
 
     const start = (): boolean => {
       if (needsLast(order) && !last) return false; // start is off: the warning under the table says why
-      if (!todo().length) {
+      if (!todo().list.length) {
         message = "nothing to scan yet";
         return false;
       }

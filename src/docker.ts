@@ -33,7 +33,7 @@ const REGISTRIES = [...(process.env.WINDSCOUT_REGISTRY_MIRRORS?.split(",").map((
 // openresolv: the app sets the tunnel's DNS through resolvconf; without it, DNS goes nowhere once connected.
 // The CMD first checks the kernel (WSL's builds tun and parts of nftables as modules): no tun or nftables, no tunnel, so
 // the container stops saying so instead of scanning. The helper's WireGuard routing also puts a fib rule in an inet table,
-// which Docker Desktop's own kernel (macOS, Windows without WSL) can't run: WS_WIREGUARD=0 then, and it runs on this computer.
+// which Docker Desktop's own kernel (macOS, Windows without WSL) can't run: WS_WIREGUARD=0 then, and a parallel scan skips it.
 // No systemd in a container: start the helper (root) like its unit would; the worker starts the app once it has the session
 const DOCKERFILE = `FROM ${BASE_TAG}
 ENV LANG=C.UTF-8
@@ -117,8 +117,8 @@ const WORKER_MEMORY = 250e6; // bytes per container: Windscribe's app and helper
 // ponytail: past this, more containers mostly add load on the one uplink, and WireGuard keys on the account; raise if real scans say so
 const MAX_WORKERS = 16;
 
-/** Protocols the containers can't do, which a parallel scan runs on this computer after them: IKEv2 (Windscribe's Linux app
- * has none), and WireGuard when their kernel can't run its routing (see DOCKERFILE) */
+/** Protocols the containers can't do, which a parallel scan skips: IKEv2 (Windscribe's Linux app has none), and WireGuard
+ * when their kernel can't run its routing (see DOCKERFILE) */
 export const notInContainers = (protocols: readonly string[], wireguard: boolean) =>
   new Set(protocols.filter((p) => /^ikev2(:|$)/.test(p) || (!wireguard && /^wireguard(:|$)/.test(p))));
 
