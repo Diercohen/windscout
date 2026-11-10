@@ -19,16 +19,20 @@ test("the username and password 0.6.0 saved are deleted, and nothing else", () =
   forgetLogin(); // none left: fine
 });
 
-test("a saved speed-test choice is kept, and the rest of the choice stays", async () => {
+test("a saved choice is kept: speed test, scanning type (random on, from before, reads as random) and the rest", async () => {
   const { loadConfig } = await import("../dist/config.js");
   mkdirSync(dirname(CONFIG), { recursive: true });
   writeFileSync(CONFIG, JSON.stringify({ countries: ["DE"], protocols: ["tcp"], speed: true, random: true, timeout: 20 }));
   const c = loadConfig();
   assert.equal(c.speed, true);
-  assert.deepEqual([c.countries, c.protocols, c.random, c.timeout], [["DE"], ["tcp"], true, 20]);
+  assert.deepEqual([c.countries, c.protocols, c.order, c.stopAtFirst, c.timeout], [["DE"], ["tcp"], "random", false, 20]);
+  writeFileSync(CONFIG, JSON.stringify({ order: "last-only", stopAtFirst: true }));
+  assert.deepEqual([loadConfig().order, loadConfig().stopAtFirst], ["last-only", true]);
+  writeFileSync(CONFIG, JSON.stringify({ order: "sideways" }));
+  assert.equal(loadConfig().order, "default");
 });
 
-test("the last result's working connections are saved best first, and a scan where nothing worked keeps them", async () => {
+test("the last result's working connections are saved best first, a scan keeps the ones it didn't try, and one where nothing worked keeps them all", async () => {
   const { loadLast, saveLast, LAST_FILE } = await import("../dist/config.js");
   rmSync(LAST_FILE, { force: true });
   assert.equal(loadLast(), null);
@@ -40,6 +44,8 @@ test("the last result's working connections are saved best first, and a scan whe
   // stopped after trying DE tcp:443 (failed) and FR udp (worked): NL stealth wasn't reached, so it stays
   saveLast([ok("FR", "udp", 30)], 3000, new Set(["DE tcp:443", "FR udp"]));
   assert.deepEqual(loadLast(), { at: 3000, results: [ok("FR", "udp", 30), ok("NL", "stealth", 60)] });
+  saveLast([], 4000, new Set(["FR udp", "NL stealth"])); // tried them, nothing worked: the network may be down, so they stay
+  assert.equal(loadLast().at, 3000);
   writeFileSync(LAST_FILE, "not json");
   assert.equal(loadLast(), null);
 });

@@ -1,6 +1,6 @@
-// A scan: every country × protocol pair (or only the given pairs, for a rescan), tried in order, with pause and stop.
+// A scan: the attempts its scanning type plans (plan()), tried in order, with pause and stop.
 // Each slot runs one attempt at a time: one slot here, or one per docker container in a parallel scan.
-import { probe, type ProbeOptions, type Result } from "./probe.js";
+import { probe, reliable, type ProbeOptions, type Result } from "./probe.js";
 import { now } from "./time.js";
 
 // ponytail: rough per-attempt cost: a failure burns the timeout, a success ~connect+speed test; refine from real runs
@@ -13,7 +13,8 @@ export type Prober = (query: string, protocol: string, options: ProbeOptions) =>
 export interface ScanOptions {
   timeout: number; // seconds to wait for each connection
   speedTest: boolean; // false = connect-only: skip the download test, rank by latency
-  only?: readonly Attempt[]; // just these pairs, not every country × protocol: a rescan of the last result
+  only?: readonly Attempt[]; // just these pairs, in this order (plan()), not every country × protocol in list order
+  stopAtFirst?: boolean; // check each connection holds up (probe's steady), and stop at the first reliable one: no more start
 }
 
 /** Called around each attempt, e.g. to print a progress line */
@@ -37,7 +38,31 @@ export interface Slot {
   name?: string; // the after-slot's
 }
 
-export type Attempt = { country: string; protocol: string };
+export type Attempt = { country: string; protocol: string; saved?: boolean }; // saved: a working connection of the last result
+
+/** The scanning type: the selection in list order, or with its countries shuffled; the last result's working connections that
+ * are in the selection first, then the rest of it; or only the last result's working connections, whatever is selected */
+export type Order = "default" | "random" | "last-first" | "last-only";
+export const ORDERS: readonly Order[] = ["default", "random", "last-first", "last-only"];
+
+const base = (protocol: string) => protocol.split(":")[0]; // "tcp:443" → "tcp"
+
+/** What a scan of these countries and protocols tries, in the order of the scanning type, each once. saved: the last result's
+ * connections, best first. ports: each protocol's ports, its default first, so "tcp" and "tcp:443" are one attempt */
+export function plan(order: Order, countries: readonly string[], protocols: readonly string[],
+  saved: readonly Pick<Result, "query" | "protocol">[] = [], ports: ReadonlyMap<string, number[]> = new Map()): Attempt[] {
+  const seen = new Set<string>();
+  const once = ({ country, protocol }: Attempt) => {
+    const [p, port] = protocol.split(":"), key = `${country} ${p}:${port ?? ports.get(p)?.[0] ?? ""}`;
+    return !seen.has(key) && !!seen.add(key);
+  };
+  const last = saved.map((r): Attempt => ({ country: r.query, protocol: r.protocol, saved: true }));
+  if (order === "last-only") return last.filter(once);
+  const bases = new Set(protocols.map(base));
+  const first = order === "last-first" ? last.filter((a) => countries.includes(a.country) && bases.has(base(a.protocol))) : [];
+  const list = order === "random" ? countries.map((c) => [Math.random(), c] as const).sort(([x], [y]) => x - y).map(([, c]) => c) : countries;
+  return [...first, ...list.flatMap((country) => protocols.map((protocol) => ({ country, protocol })))].filter(once);
+}
 
 /** Progress views read the fields; their keys call togglePause() and stop() */
 export class Scan {
@@ -49,6 +74,7 @@ export class Scan {
   readonly started = now();
   done = 0;
   stopping = false; // stop after the current attempts
+  found = false; // stopAtFirst: a connection held up, so the scan is stopping
   // a pause lands between attempts, so the VPN is disconnected while waiting
   paused = false;
   waiting = false; // paused, and no attempt running
@@ -104,7 +130,7 @@ export class Scan {
 
   /** One slot: takes the attempts it can make from the queue, one at a time, until there are none */
   private async work(prober: Prober, slot: Slot, can: (protocol: string) => boolean, queue: Attempt[], left: Map<string, number>, hooks: ScanHooks) {
-    const { timeout, speedTest } = this.options;
+    const { timeout, speedTest, stopAtFirst = false } = this.options;
     for (;;) {
       while (this.paused && !this.stopping) {
         if (!this.waiting && this.slots.every((s) => !s.current)) { // the last running attempt is over
@@ -121,7 +147,7 @@ export class Scan {
       hooks.attempt?.(country, protocol);
       let r: Result;
       try {
-        r = await prober(country, protocol, { timeout, speedTest, stopped: () => this.stopping, onStep: (s) => (slot.step = s) });
+        r = await prober(country, protocol, { timeout, speedTest, steady: stopAtFirst, stopped: () => this.stopping, onStep: (s) => (slot.step = s) });
       } catch (e) { // this slot is done for (its container stopped): the others take over its attempt
         queue.unshift(next);
         Object.assign(slot, { current: null, step: (e as Error).message });
@@ -137,6 +163,10 @@ export class Scan {
       left.set(country, left.get(country)! - n);
       if (!left.get(country)) this.finished.push(country);
       hooks.result?.(r);
+      if (stopAtFirst && reliable(r) && !this.stopping) {
+        this.found = true;
+        this.stop();
+      }
     }
   }
 }

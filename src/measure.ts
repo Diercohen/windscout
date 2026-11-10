@@ -11,7 +11,7 @@ setDefaultResultOrder("ipv4first");
 
 const LATENCY_URL = "https://www.gstatic.com/generate_204";
 const SPEED_URL = "https://speed.cloudflare.com/__down?bytes=10000000";
-const SPEED_SECONDS = 15;
+export const SPEED_SECONDS = 15;
 
 /** Best round trip of a few tries, in ms; null if none got through */
 export async function latencyMs(tries = 3): Promise<number | null> {

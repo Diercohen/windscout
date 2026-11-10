@@ -320,7 +320,7 @@ export async function startWorkers(n: number, session: Session, onStatus: (text:
     p.on("error", (e) => gone(e.message));
     p.on("close", (code) => gone(lastLine(err) || `exited (${code})`));
 
-    const prober: Prober = (query, protocol, { timeout, speedTest, stopped = () => false, onStep = () => {} }) =>
+    const prober: Prober = (query, protocol, { timeout, speedTest, steady = false, stopped = () => false, onStep = () => {} }) =>
       new Promise((done, reject) => {
         if (dead) return reject(new Error(`container ${i + 1} stopped: ${dead}`));
         let leave: (() => void) | null = null, over = false;
@@ -337,7 +337,7 @@ export async function startWorkers(n: number, session: Session, onStatus: (text:
           } else if (m.measured) leave?.(), (leave = null);
           else if (m.result) end(), done(m.result);
         };
-        send({ probe: { query, protocol, timeout, speedTest } });
+        send({ probe: { query, protocol, timeout, speedTest, steady } });
       });
 
     fail = (why) => (onStatus(`container ${i + 1}: ${why}`), resolve(null));

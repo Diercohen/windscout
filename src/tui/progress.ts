@@ -9,7 +9,7 @@ import { countryName, flag } from "./country.js";
 import { matrix, resultTable } from "./tables.js";
 import { draw, enterScreen, input, leaveScreen, out, repoLink } from "./terminal.js";
 import { bold, cyan, dim, green, red, vw, yellow } from "./text.js";
-import { bar, box, centerIn } from "./widgets.js";
+import { bar, box, centerIn, spin } from "./widgets.js";
 
 /** Shows a scan while it runs; close() once it's over */
 export interface ScanView extends ScanHooks {
@@ -19,7 +19,9 @@ export interface ScanView extends ScanHooks {
 /** Progress bar, current attempt, results so far. tab switches the table, p pauses, q stops (twice: quits).
  * blocking: we turned the firewall on for the scan */
 export function showProgress(scan: Scan, blocking: boolean): ScanView {
-  const { protocols, options: { timeout, speedTest } } = scan;
+  const { protocols, options: { timeout } } = scan;
+  const speedTest = scan.options.speedTest || Boolean(scan.options.stopAtFirst); // stop at the first measures speed too
+  let quitting = false; // q pressed: a second one quits right away
   let view: "ranking" | "availability" = speedTest ? "ranking" : "availability"; // tab switches
   let frame = 0;
 
@@ -31,7 +33,7 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
     const partial = slots.reduce((sum, s) => sum + (s.current ? Math.min(0.95, (now() - s.attemptStart) / attemptSeconds(timeout)) : 0), 0);
     const fraction = (done + (done < total ? partial : 0)) / total;
     const eta = (total - done) * (done ? elapsed / done : attemptSeconds(timeout) / slots.length);
-    const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame++ % 10];
+    const spinner = spin(frame++);
     const ok = sortOk(results);
     // blocked: nothing worked, and something was really tried (a key limit or a port the app doesn't offer tries nothing)
     const failed = finished.filter((c) => !results.some((r) => r.query === c && r.status === "ok")
@@ -62,7 +64,8 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
     const width = Math.max(minW, table.length ? vw(table[0]) : 0);
     const inner = width - 4;
 
-    const status = stopping ? yellow(` stopping after the current attempt${many ? "s" : ""}…`)
+    const status = scan.found ? green(" ✓ a connection held up · stopping the other attempts…")
+      : stopping ? yellow(` stopping after the current attempt${many ? "s" : ""}…`)
       : waiting ? yellow(` paused · VPN disconnected${blocking ? " · firewall blocking internet" : ""} · press p to resume`)
       : "";
     const pausing = paused && !waiting && frame % 8 < 5;
@@ -110,12 +113,13 @@ export function showProgress(scan: Scan, blocking: boolean): ScanView {
       scan.togglePause();
       render();
     } else if (key.name === "q" || key.name === "escape" || (key.ctrl && key.name === "c")) {
-      if (scan.stopping) { // second press: bail out now
+      if (quitting) { // second press: bail out now
         leaveScreen();
         console.error(`stopped. the VPN may still be connecting: run '${CLI} disconnect'`);
         await restoreFirewall();
         process.exit(130);
       }
+      quitting = true;
       scan.stop();
       render();
     }
@@ -136,11 +140,13 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, Math.max(0, n 
 /** A line per attempt. Ctrl-C stops after the current attempt, a second one quits */
 export function logProgress(scan: Scan): ScanView {
   const many = scan.slots.length > 1; // attempts overlap: a whole line once each is done
+  let quitting = false; // Ctrl-C pressed: a second one quits right away
   process.on("SIGINT", async () => {
-    if (scan.stopping) {
+    if (quitting) {
       await restoreFirewall();
       process.exit(130);
     }
+    quitting = true;
     scan.stop();
   });
   return {

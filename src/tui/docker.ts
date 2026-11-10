@@ -7,7 +7,7 @@ import { duration, now } from "../time.js";
 import { session } from "../windscribe.js";
 import { draw, enterScreen, input, leaveScreen, out, type Mouse } from "./terminal.js";
 import { bold, cyan, dim, vw, yellow } from "./text.js";
-import { box, centerIn } from "./widgets.js";
+import { box, centerIn, spin } from "./widgets.js";
 
 interface Dialog {
   lines: string[];
@@ -87,7 +87,7 @@ async function busy<T>(status: { label: string; line: string }, work: Promise<T>
   }
   const t = now();
   let frame = 0;
-  const tick = () => paint({ lines: [`${cyan("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame++ % 10])} ${status.label} ${dim("· " + duration(now() - t))}`,
+  const tick = () => paint({ lines: [`${cyan(spin(frame++))} ${status.label} ${dim("· " + duration(now() - t))}`,
     dim(clip(status.line)), "", dim("esc quits")] });
   // the exit handlers remove containers already started
   const quit = (_: unknown, key: Key = {}) => (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c"))

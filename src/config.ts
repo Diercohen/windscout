@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Result } from "./probe.js";
+import { ORDERS, type Order } from "./scan.js";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
 // false hides the speed test: every scan is connect-only, and a saved "on" reads as off
@@ -20,7 +21,8 @@ export interface Choice {
   protocols: string[];
   speed: boolean; // speed test on
   firewall: boolean; // block internet while scanning
-  random: boolean; // scan the countries in a shuffled order
+  order: Order; // the scanning type: what the scan tries, in which order
+  stopAtFirst: boolean; // stop at the first working connection that holds up
   allPorts: boolean; // each protocol on every port it has, not just its default
   timeout: number; // seconds to wait for each connection
   docker: boolean; // parallel scan in docker containers
@@ -35,7 +37,8 @@ export function loadConfig(): Choice | null {
       protocols: (c.protocols ?? []).filter((x: string) => PROTOCOLS.includes(x)),
       speed: SPEED_TEST && c.speed !== false,
       firewall: c.firewall === true,
-      random: c.random === true,
+      order: ORDERS.includes(c.order) ? c.order : c.random === true ? "random" : "default", // before scanning types: random on or off
+      stopAtFirst: c.stopAtFirst === true,
       allPorts: c.allPorts === true,
       timeout: c.timeout >= MIN_TIMEOUT ? c.timeout : DEFAULT_TIMEOUT,
       docker: c.docker === true,
@@ -68,7 +71,7 @@ export function saveDockerWireGuard(wireguard: boolean): void {
   } catch {} // not being able to remember isn't worth failing the scan
 }
 
-/** The last scan's working connections, best first (as the report numbers them), for a rescan and windscout connect */
+/** The last scan's working connections, best first (as the report numbers them), for the scanning types and windscout connect */
 export interface Last {
   at: number; // when the scan ended, ms since the epoch
   results: Result[];
@@ -85,11 +88,11 @@ export function loadLast(): Last | null {
   }
 }
 
-/** Saves a scan's working connections; a scan where nothing worked keeps the last one that found something.
- * With tried (a stopped scan's "query protocol" pairs), the saved connections it didn't get to stay, after its own */
+/** Saves a scan's working connections; a scan where nothing worked keeps the last one that found something (the network may
+ * just be down). With tried (the "query protocol" pairs the scan tried), the saved connections it didn't try stay, after its own */
 export function saveLast(results: Result[], at = Date.now(), tried?: ReadonlySet<string>): void {
-  if (tried) results = [...results, ...(loadLast()?.results ?? []).filter((r) => !tried.has(`${r.query} ${r.protocol}`))];
   if (!results.length) return;
+  if (tried) results = [...results, ...(loadLast()?.results ?? []).filter((r) => !tried.has(`${r.query} ${r.protocol}`))];
   try {
     mkdirSync(dirname(LAST_FILE), { recursive: true });
     writeFileSync(LAST_FILE, JSON.stringify({ at, results }, null, 2) + "\n");

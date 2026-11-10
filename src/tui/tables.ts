@@ -18,7 +18,7 @@ const resultRow = (r: Result, i: number) => [
   r.connectS === null ? "-" : `${fmt(r.connectS, 1)} s`,
   r.latencyMs === null ? "-" : `${fmt(r.latencyMs, 0)} ms`,
   r.speedMbps === null ? "-" : bold(`${fmt(r.speedMbps, 1)} Mbps`),
-  r.status === "ok" ? green("✓ ok") : r.status === "key limit" || r.status === "no such port" ? yellow(r.status) : red(r.status),
+  r.status === "ok" ? green("✓ ok") : ["key limit", "no such port", "unreliable"].includes(r.status) ? yellow(r.status) : red(r.status),
 ];
 
 /** Numbered attempts, in the given order; the Speed column only when the speed test ran */

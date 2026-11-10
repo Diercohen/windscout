@@ -47,6 +47,9 @@ export function grid(cols: Column[], rows: string[][], { caption, captionRight =
   return out;
 }
 
+/** A spinner's character for this frame */
+export const spin = (frame: number) => "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[frame % 10];
+
 /** s, indented to sit centered in width columns */
 export const centerIn = (s: string, width: number) => " ".repeat(Math.max(0, Math.floor((width - vw(s)) / 2))) + s;
 

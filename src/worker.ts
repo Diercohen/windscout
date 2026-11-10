@@ -12,7 +12,7 @@ const APP = "/opt/windscribe/Windscribe"; // as the image installs it
 
 type Message = Partial<{ // from the host
   session: Session; // the first message: the session this computer's app is logged in with
-  probe: { query: string; protocol: string; timeout: number; speedTest: boolean };
+  probe: { query: string; protocol: string; timeout: number; speedTest: boolean; steady: boolean };
   go: boolean; // our turn to measure
   stop: boolean;
 }>;
@@ -59,9 +59,9 @@ export async function worker(): Promise<void> {
   for (let m: Message | null; (m = await next()); ) {
     if (!m.probe) continue;
     stop = false;
-    const { query, protocol, timeout, speedTest } = m.probe;
+    const { query, protocol, timeout, speedTest, steady } = m.probe;
     const result = await probe(query, protocol, {
-      timeout, speedTest,
+      timeout, speedTest, steady,
       stopped: () => stop,
       onStep: (step) => send({ step }),
       measure: async (fn) => {

@@ -105,18 +105,18 @@ Run `windscout` with no arguments to open the interactive picker:
 | `p` | toggle [all ports](#all-ports): each protocol on every port it has, not just its default |
 | `s` | toggle the speed test (off = connect-only mode) |
 | `f` | toggle "block internet while scanning" (firewall) |
-| `r` | toggle random order: scan the selected countries shuffled, a new order each run |
 | `d` | toggle the [parallel scan in docker containers](#parallel-scan-with-docker) (installs or starts docker first, after asking) |
-| `l` | toggle [rescan last result](#last-result-rescan-and-connect): start re-checks only the last scan's working connections (not remembered: off each time) |
+| `o` | change the [scanning type](#scanning-type): default, by random country, by last success result first, only the last results |
+| `w` | toggle [stop at the first working connection](#stop-at-the-first-working-connection) that holds up |
 | `u` | update to the newer version and restart (only when the picker shows one is out) |
 | `enter` | start scanning |
 | `q` | quit (during a scan: stop and show partial results; press again to force quit) |
 
-**Mouse:** click a country to select or unselect it, click a protocol or the speed-test line to toggle it, click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys; the shortcut key is underlined on screen (on the buttons, the protocol numbers and `s`). This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
+**Mouse:** click a country to select or unselect it, click a protocol or a setting's line to toggle it (the scanning type's line changes the type), click the search box to start typing (click anywhere else to leave it), and scroll the list with the wheel. The `[ ▶ Start ]  [ All ]  [ None ]  [ Quit ]` buttons under the table do the same as their keys; the shortcut key is underlined on screen (on the buttons, the protocol numbers and `s`). This needs a terminal with mouse support, which most have. On Windows, use Windows Terminal; if clicks do nothing there, the keyboard does everything.
 
 Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
-While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter to connect to the best one, type another one's number to connect to that, or `q` to quit.
+After you start, the Start button spins (`[ ⠋ Starting… ]`) until the scan's screen shows, which can take a moment when it turns the firewall on or starts docker. While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter to connect to the best one, type another one's number to connect to that, or `q` to quit.
 
 ### Non-interactive
 
@@ -138,21 +138,46 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-a, --all` | include failed attempts in the final table | off |
 | `-n, --no-speed` | connect-only mode: skip the download test, rank by latency | picker: saved, or connect-only on first run; with `-c`: speed test on |
 | `-f, --firewall` | block internet while scanning, except through the VPN | picker: saved, or off; with `-c`: off |
-| `-r, --random` | scan the countries in a random order | picker: saved, or off; with `-c`: off |
+| `-o, --order` | [scanning type](#scanning-type): `default`, `random`, `last-first` or `last-only` (`-r` still works: the same as `-o random`) | picker: saved, or `default`; with `-c`: `default` |
+| `-w, --stop-at-first` | [stop at the first working connection](#stop-at-the-first-working-connection) that holds up | picker: saved, or off; with `-c`: off |
 | `-d, --docker` | [scan in parallel, in docker containers](#parallel-scan-with-docker) | picker: saved, or off; with `-c`: off |
 | `-v, --version` | print the installed version; if a newer one is on npm, show the update command (with `sudo` when needed) and ask (y/n) to run it | |
 
 ## Last result: rescan and connect
 
-After each scan, WindScout saves its working connections, best first, to `~/.config/windscout/last.json`. That includes a partial scan you stopped, and a scan started with `-c`. A scan where nothing worked keeps the previous result, and a scan you stopped keeps the saved connections it didn't get to.
+After each scan, WindScout saves its working connections, best first, to `~/.config/windscout/last.json`. That includes a partial scan you stopped, and a scan started with `-c`. A scan's working connections replace the saved ones it tried, so the ones that stopped working drop out. The saved connections it didn't try stay, after its own: those of countries it didn't scan, and what a stopped scan didn't get to. A scan where nothing worked keeps the previous result as it is, since the network may just be down.
 
-- **Rescan:** in the picker, the `l` line shows the saved result (`3 working · 2 days ago`). Press `l` and start, and only those location and protocol pairs (on their port, if they had one) are tried again, instead of the selected countries. The timeout, speed test, firewall and docker settings apply as usual, and the estimate counts the saved pairs. The rescan's working connections replace the saved ones, so the ones that stopped working drop out. Rescan isn't remembered: the picker opens with it off, and your country selection stays as it was.
+- **Rescan:** the [scanning types](#scanning-type) *by last success result first* and *only the last results* use the saved connections: the first tries the ones in your selection before the rest of it, the second tries only them.
 - **Connect:** `windscout connect` connects to the best saved connection, without a scan. It checks each as the scan does: when one doesn't connect within the timeout (`-t`, or the saved one), or has no internet through it, it tries the next, until one connects. When none does, or there's no saved scan, it says so and suggests a rescan or a new scan.
 
 ```sh
 windscout connect          # the best saved connection that still works
 windscout connect -t 30    # wait longer for each
 ```
+
+## Scanning type
+
+Press `o` in the picker, or pass `-o`, to choose what a scan tries and in which order. The picker's line shows the type, and the estimate under the table counts what that type scans. The type is remembered with your other settings.
+
+| Type | `-o` | What it scans |
+|---|---|---|
+| default | `default` | the selected countries × protocols, the countries in list order |
+| by random country | `random` | the same, with the countries shuffled, a new order each run |
+| by last success result first | `last-first` | the same, but the [last result](#last-result-rescan-and-connect)'s working connections among them go first, best first and on their own port, then the rest. With one country selected, only that country is scanned, its saved connections first. The line shows how many saved connections are in your selection (`1 of 7 saved selected · 3h ago`) |
+| only the last results | `last-only` | only the last result's working connections, each on its own protocol and port. The countries, protocols and all ports are skipped, so the picker greys them out and locks them (your selection stays for next time). With `-o last-only`, `-c` isn't needed |
+
+The two types by the last result need a saved scan. Until there is one, choosing either turns `[ ▶ Start ]` off (greyed out), and a warning takes the estimate's place: `no saved scan yet, so start is off: press o for another scanning type`. Without the picker, `-o last-first` and `-o last-only` stop with an error instead. The estimate counts each saved connection once: `tcp` and `tcp:443` are the same attempt when 443 is tcp's default port.
+
+### Stop at the first working connection
+
+Press `w` in the picker, or pass `-w`, to end the scan at the first connection that works and holds up: the attempts still connecting give up, and no more start. The scan stops at one connection, so that one has to be good for long use. A tunnel can connect and then be cut or throttled once traffic flows, so each connection that connects is checked first:
+
+1. A speed test, even with the speed test off (`s`, `-n`). It must reach at least 1 Mbps.
+2. Then it has to stay connected, with internet through it, for 5 round trips 2 s apart (about 10 s), each round trip allowed one retry.
+
+A connection that drops during the check gets the status `unreliable` and doesn't count as working: it isn't saved, or offered to connect to. One that stays up but is slower than 1 Mbps still counts as working, but the scan doesn't stop there and keeps looking. If nothing passes, the scan runs to the end, and the report shows whatever worked.
+
+The check adds up to about 30 s to each connection that connects (the speed test alone takes up to 15 s). The estimate reads `up to N attempts · at most ≈ …`, for when none holds up. With a type by the last result, the best saved connection goes first, and the line shows about how long the scan takes if it still holds up (`≈ 33s if DE stealth still holds up`). It's the quickest way back online: *only the last results* or *by last success result first*, with `w`.
 
 ## Connect-only mode
 

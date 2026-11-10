@@ -24,6 +24,8 @@ export interface Mouse {
 
 let fullscreen = false;
 let link: { y: number; x: number } | null = null; // where draw() last put the repo link
+let waiting: ReturnType<typeof setInterval> | undefined; // drawUntilNext()'s timer
+let redrawing = false; // drawUntilNext()'s own redraw is drawing
 
 const openUrl = (url: string) =>
   spawn(({ darwin: "open", win32: "explorer" } as Partial<Record<NodeJS.Platform, string>>)[process.platform] ?? "xdg-open",
@@ -54,6 +56,7 @@ export function enterScreen(): void {
 
 /** Back to the normal screen; drops every key and mouse listener */
 export function leaveScreen(): void {
+  clearInterval(waiting);
   if (!fullscreen) return;
   fullscreen = false;
   process.stdin.setRawMode(false);
@@ -65,8 +68,25 @@ export function leaveScreen(): void {
 }
 process.on("exit", leaveScreen);
 
+/** Calls redraw every 120 ms (for a spinner) while the screen waits for the next one: until another screen draws, or leaveScreen() */
+export function drawUntilNext(redraw: () => void): void {
+  const tick = () => {
+    redrawing = true;
+    try {
+      redraw();
+    } finally {
+      redrawing = false;
+    }
+  };
+  clearInterval(waiting);
+  waiting = setInterval(tick, 120);
+  waiting.unref(); // never what keeps the process alive
+  tick();
+}
+
 /** Redraws in place, centered: home, each line cleared to its end, then clear below (no flicker). Returns the top-left corner */
 export function draw(lines: string[]): { left: number; top: number } {
+  if (!redrawing) clearInterval(waiting); // another screen: it takes over from drawUntilNext()
   const cols = out.columns || 80, rows = out.rows || 24;
   const w = Math.max(...lines.map(vw));
   const left = " ".repeat(Math.max(0, Math.floor((cols - w) / 2)));
