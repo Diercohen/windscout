@@ -16,6 +16,13 @@ export interface Result {
   status: Status;
 }
 
+/** A working connection of a scan, as the results screen and the last result keep it, with what was learned about it since */
+export interface Entry extends Result {
+  checked?: number; // ms since the epoch: the last check that got through it (a test, a connect, a background check)
+  failed?: string; // why the last check didn't get through ("timeout", "no internet", "dropped after 1m 05s"): it goes last
+  failedAt?: number; // ms since the epoch
+}
+
 export interface ProbeOptions {
   timeout: number; // seconds to wait for the connection
   speedTest: boolean; // also measure download speed
@@ -84,12 +91,13 @@ export async function attempt(query: string, protocol: string,
     } else if (s.includes("does not exist")) return end("no such location");
     // Windscribe refused this app another WireGuard key for the account: says nothing about this network
     else if (s.includes("WireGuard key limit") && now() - t > 3) return end("key limit");
-    else if (s === "Disconnected" && now() - t > 3) return end("failed");
+    // an error the app gave up with ("Error: WireGuard adapter setup failed", out of data, …): no need to wait out the timeout
+    else if ((s === "Disconnected" || s.startsWith("Error")) && now() - t > 3) return end("failed");
     onStep(`connecting ${r.location}`.trim());
     await sleep(1000);
   }
   // a port the app doesn't offer for the protocol: it connects on the protocol's default instead, so this port wasn't tried
-  const port = protocol.split(":")[1], shown = (await windscribe("status")).match(/^Protocol: .*:(\d+)\s*$/m)?.[1];
+  const port = protocol.split(":")[1], shown = (await windscribe("status")).match(/^Protocol:[ \t]*\S*:(\d+)\s*$/m)?.[1];
   if (port && shown && shown !== port) return end("no such port");
   let status = "interrupted" as Status, reconnect = false; // reconnect: it passed the other checks, so the reconnect is next
   await measure(async () => {

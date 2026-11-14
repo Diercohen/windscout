@@ -12,6 +12,18 @@ setDefaultResultOrder("ipv4first");
 const LATENCY_URL = "https://www.gstatic.com/generate_204";
 const SPEED_URL = "https://speed.cloudflare.com/__down?bytes=10000000";
 export const SPEED_SECONDS = 15;
+export const SPEED_MB = 10; // the most a speed test downloads
+const TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"; // the speed test's Cloudflare: it says which IP asked
+
+/** The IP this connection goes out from, as Cloudflare sees it; "" when it didn't answer */
+export async function outsideIp(): Promise<string> {
+  try {
+    const text = await (await fetch(TRACE_URL, { signal: AbortSignal.timeout(5000) })).text();
+    return text.match(/^ip=(\S+)/m)?.[1] ?? "";
+  } catch {
+    return "";
+  }
+}
 
 /** Best round trip of a few tries, in ms; null if none got through */
 export async function latencyMs(tries = 3): Promise<number | null> {

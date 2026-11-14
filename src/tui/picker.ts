@@ -5,7 +5,7 @@ import { loadDockerWireGuard, MIN_HOLD, MIN_TIMEOUT, saveConfig, SPEED_TEST, typ
 import { dockerState, loginSeconds, notInContainers, workerCount, type DockerState } from "../docker.js";
 import { steadySeconds } from "../probe.js";
 import { attemptSeconds, estimate, ORDERS, plan, type Order } from "../scan.js";
-import { duration } from "../time.js";
+import { ago, duration } from "../time.js";
 import { canUpdate, checkUpdate, versionLines } from "../update.js";
 import { COUNTRIES, protocolPorts, PROTOCOLS, withPorts } from "../windscribe.js";
 import { countryName, flag } from "./country.js";
@@ -58,12 +58,6 @@ const needsLast = (o: Order) => o === "last-first" || o === "last-only";
 const SKIPPED = "skipped with only the last results: o changes the scanning type";
 
 const flip = <T>(set: Set<T>, value: T) => (set.has(value) ? set.delete(value) : set.add(value));
-
-// "5m ago", "3h ago", "2 days ago"
-const ago = (ms: number) => {
-  const m = Math.max(0, Math.round((Date.now() - ms) / 60000)), h = Math.round(m / 60), d = Math.round(h / 24);
-  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : h < 48 ? `${h}h ago` : `${d} days ago`;
-};
 
 /** Resolves to the choice (also saved for next time), null when the user quits, or "update" for u */
 export function pick(saved: Choice | null, { timeout, speedTest, firewall, order, stopAtFirst, hold, allPorts, docker, last }: PickerOptions): Promise<Choice | null | "update"> {

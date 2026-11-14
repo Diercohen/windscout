@@ -36,7 +36,7 @@ exec runuser -u ws -- env HOME=/home/ws sh -c '
     writeFileSync(SETTINGS, withSession(ini, { userId: iniValue(host, \"userId\") ?? \"\", authHash }));"
   /opt/windscribe/Windscribe > /dev/null 2>&1 &
   # logging in with a session takes a while: wait for it to end either way (as the worker does)
-  for i in $(seq 180); do windscribe-cli status 2>/dev/null | grep -qE "Login state: (Logged in|Logged out|Error)" && break; sleep 1; done
+  for i in $(seq 180); do windscribe-cli status 2>/dev/null | grep -qE "^Login( state)?: +(Logged in|Logged out|Error)" && break; sleep 1; done
   # its login exits 0 on a wrong password too: ask again until the app says logged in
   until windscribe-cli status | grep -q "Logged in"; do
     [ -t 0 ] || { echo "Windscribe is not logged in: run the container with -it to log in" >&2; exit 1; }

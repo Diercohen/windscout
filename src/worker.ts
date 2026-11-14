@@ -4,9 +4,10 @@ import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
+import { outsideIp } from "./measure.js";
 import { probe } from "./probe.js";
 import { now, sleep } from "./time.js";
-import { SETTINGS, windscribe, withSession, type Session } from "./windscribe.js";
+import { loginState, SETTINGS, windscribe, withSession, type Session } from "./windscribe.js";
 
 const APP = "/opt/windscribe/Windscribe"; // as the image installs it
 
@@ -15,6 +16,7 @@ type Message = Partial<{ // from the host
   probe: { query: string; protocol: string; timeout: number; speedTest: boolean; steady: number };
   go: boolean; // our turn to measure
   stop: boolean;
+  whoami: boolean; // between attempts: which IP this container's traffic goes out from
 }>;
 
 const send = (m: object) => process.stdout.write(JSON.stringify(m) + "\n");
@@ -49,14 +51,14 @@ export async function worker(): Promise<void> {
   spawn(APP, { stdio: "ignore" }).on("error", () => {}); // not there: its CLI never answers below
   // its CLI answers once it's up, and says logged in once Windscribe accepts the session, or the error it got instead.
   // One container took 37 s in a test, 16 at once 38-75 s
-  let status = "";
-  for (const t = now(); now() - t < 180 && !/Login state: (Logged in|Error)/.test(status = await windscribe("status")); ) await sleep(1000);
-  if (!status.includes("Logged in")) {
-    const state = status.match(/^Login state: (.*)$/m)?.[1].trim();
-    return void console.error(state ? `Windscribe's app didn't log in with this computer's session (${state})` : "Windscribe's app didn't start in the container");
+  let login = "";
+  for (const t = now(); now() - t < 180 && !/^(Logged in|Error)/.test(login = loginState(await windscribe("status"))); ) await sleep(1000);
+  if (login !== "Logged in") {
+    return void console.error(login ? `Windscribe's app didn't log in with this computer's session (${login})` : "Windscribe's app didn't start in the container");
   }
   send({ ready: true, wireguard: process.env.WS_WIREGUARD !== "0" }); // the image's CMD checked the kernel
   for (let m: Message | null; (m = await next()); ) {
+    if (m.whoami) send({ ip: await outsideIp() }); // its app is disconnected now: this is the container's own way out
     if (!m.probe) continue;
     stop = false;
     const { query, protocol, timeout, speedTest, steady } = m.probe;

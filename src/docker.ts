@@ -74,10 +74,18 @@ export const INSTALL_DOCS = ({
 
 const lastLine = (s: string) => s.trim().split("\n").at(-1)?.trim() ?? "";
 
-/** Runs a command (a shell line when args is null); onLine gets its output as it comes, curl's progress too. code -1: not installed */
-function exec(cmd: string, args: string[] | null, { input, onLine = () => {}, timeout }: { input?: string; onLine?: (line: string) => void; timeout?: number } = {}) {
+interface ExecOptions {
+  input?: string;
+  onLine?: (line: string) => void;
+  timeout?: number;
+  signal?: AbortSignal; // aborting kills it
+}
+
+/** Runs a command (a shell line when args is null); onLine gets its output as it comes, curl's progress too. code -1: not
+ * installed (or aborted) */
+function exec(cmd: string, args: string[] | null, { input, onLine = () => {}, timeout, signal }: ExecOptions = {}) {
   return new Promise<{ code: number; out: string }>((resolve) => {
-    const p = args ? spawn(cmd, args, { timeout }) : spawn(cmd, { shell: true, timeout });
+    const p = args ? spawn(cmd, args, { timeout, signal }) : spawn(cmd, { shell: true, timeout, signal });
     let out = "";
     const take = (d: Buffer) => {
       out = (out + d).slice(-20_000);
@@ -93,7 +101,7 @@ function exec(cmd: string, args: string[] | null, { input, onLine = () => {}, ti
 }
 
 /** Runs the docker CLI. Not on PATH: Docker Desktop's folder goes on it, for the CLI and the credential helper beside it */
-async function docker(args: string[], options?: Parameters<typeof exec>[2]) {
+async function docker(args: string[], options?: ExecOptions) {
   const r = await exec("docker", args, options);
   if (r.code !== -1 || !DESKTOP_CLI || !existsSync(DESKTOP_CLI) || process.env.PATH?.split(delimiter).includes(dirname(DESKTOP_CLI))) return r;
   process.env.PATH = dirname(DESKTOP_CLI) + delimiter + process.env.PATH;
@@ -101,17 +109,20 @@ async function docker(args: string[], options?: Parameters<typeof exec>[2]) {
 }
 
 export type DockerState = "ready" | "stopped" | "denied" | "missing";
-let info = { cpus: 0, memory: 0, os: "linux" }; // docker's, from the last dockerState() that found it ready
+let info = { cpus: 0, memory: 0, os: "linux", name: "" }; // docker's, from the last dockerState() that found it ready
 
 /** ready: the daemon answers us. denied: it runs, but this user may not use it (Linux: not in the docker group yet) */
 export async function dockerState(): Promise<DockerState> {
-  const r = await docker(["info", "--format", "{{.NCPU}} {{.MemTotal}} {{.OSType}}"], { timeout: 30_000 });
+  const r = await docker(["info", "--format", "{{.NCPU}} {{.MemTotal}} {{.OSType}} {{.OperatingSystem}}"], { timeout: 30_000 });
   if (r.code === -1) return DESKTOP && existsSync(DESKTOP) ? "stopped" : "missing";
   if (r.code) return /permission denied/i.test(r.out) ? "denied" : "stopped";
-  const [cpus, memory, os] = r.out.trim().split(/\s+/);
-  info = { cpus: Number(cpus), memory: Number(memory), os };
+  const [cpus, memory, os, ...name] = r.out.trim().split(/\s+/);
+  info = { cpus: Number(cpus), memory: Number(memory), os, name: name.join(" ") };
   return "ready";
 }
+
+/** Docker runs on this computer's own Linux kernel, as docker does on Linux, not in Docker Desktop's VM */
+export const nativeDocker = () => process.platform === "linux" && !/Docker Desktop/i.test(info.name);
 
 const WORKER_MEMORY = 250e6; // bytes per container: Windscribe's app and helper, a tunnel and node take ~120 MB
 // ponytail: past this, more containers mostly add load on the one uplink, and WireGuard keys on the account; raise if real scans say so
@@ -229,7 +240,7 @@ const answers = (registry: string) =>
     .then((r) => r.status === 200 || r.status === 401, () => false);
 
 /** Gets the image's base: from the first registry in REGISTRIES that answers and serves it */
-async function pullBase(onLine: (line: string) => void): Promise<void> {
+async function pullBase(onLine: (line: string) => void, signal?: AbortSignal): Promise<void> {
   if (!(await docker(["image", "inspect", BASE_TAG])).code) return;
   const up = await Promise.all(REGISTRIES.map(answers)); // asking them all at once: dead ones would each take the timeout
   // Docker Hub last even if it didn't answer: docker may reach it through a proxy that this process doesn't use
@@ -238,23 +249,26 @@ async function pullBase(onLine: (line: string) => void): Promise<void> {
   for (const registry of order) {
     onLine(`the base image, from ${registry}`);
     const ref = `${registry}/${BASE}`;
-    const r = await docker(["pull", ref], { onLine, timeout: 15 * 60_000 });
+    const r = await docker(["pull", ref], { onLine, timeout: 15 * 60_000, signal });
+    if (signal?.aborted) throw new Error("stopped");
     if (!r.code) return void (await docker(["tag", ref, BASE_TAG]));
     why = `${registry}: ${lastLine(r.out)}`;
   }
   throw new Error(`couldn't get the containers' base image from Docker Hub or its mirrors (${why}). A VPN may help`);
 }
 
-/** Builds the containers' image, unless this windscout's is there already; onLine gets the build's output */
-export async function buildImage(onLine: (line: string) => void): Promise<void> {
+/** Builds the containers' image, unless this windscout's is there already; onLine gets the build's output. Aborting signal
+ * stops the build (it throws) */
+export async function buildImage(onLine: (line: string) => void, signal?: AbortSignal): Promise<void> {
   if (info.os === "windows") throw new Error("Docker Desktop runs Windows containers: switch it to Linux containers (right-click its icon by the clock), then try again");
   const tag = fingerprint();
   const have = await docker(["image", "inspect", "-f", '{{index .Config.Labels "windscout"}}', IMAGE]);
   if (!have.code && have.out.trim() === tag) return;
-  await pullBase(onLine);
+  await pullBase(onLine, signal);
   // no --progress=plain: when piped, BuildKit prints plain anyway, and a distribution's docker may have only the old builder
   const r = await docker(["build", "--label", `windscout=${tag}`, "-t", IMAGE, "-f", "-", fileURLToPath(ROOT).replace(/[\\/]$/, "")],
-    { input: DOCKERFILE, onLine });
+    { input: DOCKERFILE, onLine, signal });
+  if (signal?.aborted) throw new Error("stopped");
   if (r.code) throw new Error(`building the containers' image failed: ${lastLine(r.out)}`);
 }
 
@@ -265,6 +279,7 @@ type Message = Partial<{ // from a worker
   measure: boolean; // connected, wants to measure: one container at a time, they share this computer's connection
   measured: boolean;
   result: Result;
+  ip: string; // the IP its traffic goes out from ("" when it couldn't tell), when asked
 }>;
 
 // one at a time: `await lock()` resolves to the function that lets the next one in
@@ -280,18 +295,45 @@ const running = new Map<string, ChildProcess>(); // container name → its `dock
 const removeAll = () => running.size && spawnSync("docker", ["rm", "-f", ...running.keys()], { stdio: "ignore" });
 process.on("exit", removeAll);
 
+/** A container that got ready */
+interface Worker {
+  name: string;
+  prober: Prober;
+  whoami(): Promise<string>; // the IP its traffic goes out from, between attempts; "" when it can't tell
+  alive(): boolean;
+}
+
+/** Containers started together, and what they can do */
+export interface Workers {
+  probers: Prober[];
+  wireguard: boolean; // WireGuard works in them
+  whoami(): Promise<string>; // the IP their traffic goes out from, as the first one still running sees it; "" when it can't tell
+  alive(): boolean; // one of them is still running
+  stop(): Promise<void>; // ends these containers (stopWorkers() ends all)
+}
+
 /** Starts n containers, their apps logged in with this computer's session; resolves to a prober for each container that got
- * ready, and whether WireGuard works in them */
-export async function startWorkers(n: number, session: Session, onStatus: (text: string) => void) {
+ * ready, and whether WireGuard works in them. network: the docker network they go on (docker's default bridge without);
+ * tag tells their names apart from another group's; aborting signal removes them (none gets ready then) */
+export async function startWorkers(n: number, session: Session, onStatus: (text: string) => void,
+  { network, tag = "", signal }: { network?: string; tag?: string; signal?: AbortSignal } = {}): Promise<Workers> {
   const measuring = mutex();
   let wireguard = true;
   let ready = 0;
+  const names = Array.from({ length: n }, (_, i) => `windscout-${process.pid}-${tag}${i + 1}`);
+  const remove = () => {
+    const left = names.filter((name) => running.has(name));
+    if (left.length) spawn("docker", ["rm", "-f", ...left], { stdio: "ignore" }).on("error", () => {});
+  };
+  signal?.addEventListener("abort", remove, { once: true });
 
-  const start = (i: number) => new Promise<Prober | null>((resolve) => {
-    const name = `windscout-${process.pid}-${i + 1}`;
+  const start = (i: number) => new Promise<Worker | null>((resolve) => {
+    if (signal?.aborted) return resolve(null);
+    const name = names[i];
     // its own volume keeps its app's settings for the next scans: its WireGuard keys, registered with Windscribe once
     // it makes /dev/net/tun itself: Docker's Linux VM may have none (WSL loads tun as a module), and --device needs one there
-    const p = spawn("docker", ["run", "-i", "--rm", "--init", "--name", name, "--cap-add", "NET_ADMIN", "--device-cgroup-rule", "c 10:200 rwm",
+    const p = spawn("docker", ["run", "-i", "--rm", "--init", "--name", name, ...(network ? ["--network", network] : []),
+      "--cap-add", "NET_ADMIN", "--device-cgroup-rule", "c 10:200 rwm",
       "--sysctl", "net.ipv4.conf.all.src_valid_mark=1", "-v", `windscout-${i + 1}:/home/ws/.config/Windscribe`, IMAGE],
     { detached: process.platform !== "win32" }); // its own process group, so ctrl-c reaches only us (Windows would open a window)
     running.set(name, p);
@@ -340,18 +382,40 @@ export async function startWorkers(n: number, session: Session, onStatus: (text:
         send({ probe: { query, protocol, timeout, speedTest, steady } });
       });
 
+    const whoami = () => new Promise<string>((done) => {
+      if (dead) return done("");
+      const late = setTimeout(() => done(""), 15_000);
+      fail = () => (clearTimeout(late), done(""));
+      on = (m) => typeof m.ip === "string" && (clearTimeout(late), done(m.ip));
+      send({ whoami: true });
+    });
+
     fail = (why) => (onStatus(`container ${i + 1}: ${why}`), resolve(null));
     on = (m) => {
-      if (!m.ready) return;
+      if (!m.ready || signal?.aborted) return;
       wireguard &&= m.wireguard !== false;
       fail = () => {};
       onStatus(`${++ready} of ${n} ready`);
-      resolve(prober);
+      resolve({ name, prober, whoami, alive: () => !dead });
     };
   });
 
-  const probers = (await Promise.all(Array.from({ length: n }, (_, i) => start(i)))).filter((p): p is Prober => p !== null);
-  return { probers, wireguard };
+  const workers = (await Promise.all(Array.from({ length: n }, (_, i) => start(i)))).filter((w): w is Worker => w !== null);
+  signal?.removeEventListener("abort", remove);
+  if (signal?.aborted) remove(); // got ready as it was aborted
+  return {
+    probers: workers.map((w) => w.prober),
+    wireguard,
+    whoami: async () => (await workers.find((w) => w.alive())?.whoami()) ?? "",
+    alive: () => workers.some((w) => w.alive()),
+    async stop() {
+      const names = workers.map((w) => w.name);
+      for (const name of names) running.get(name)?.stdin?.end();
+      for (let i = 0; names.some((name) => running.has(name)) && i < 40; i++) await sleep(250);
+      const stuck = names.filter((name) => running.has(name));
+      if (stuck.length) spawnSync("docker", ["rm", "-f", ...stuck], { stdio: "ignore" });
+    },
+  };
 }
 
 /** Ends the containers once the scan is over: a worker exits when its stdin closes, and docker removes its container */
@@ -360,3 +424,58 @@ export async function stopWorkers(): Promise<void> {
   for (let i = 0; running.size && i < 40; i++) await sleep(250);
   removeAll(); // stuck ones: their docker run would keep us from exiting
 }
+
+// Routing the background checks' containers around this computer's VPN (native docker on Linux). Docker sends its containers'
+// traffic out by this computer's routes, so while the VPN is connected it goes through the VPN, and a container would test
+// from the VPN's server instead of your network. So they go on a docker network of their own, and a routing rule sends what
+// comes from it out the way this computer goes without the VPN: a table with main's default routes (Windscribe's VPN routes
+// are 0.0.0.0/1 and 128.0.0.0/1 in main, or its own table for WireGuard, never main's default). Windscribe's firewall filters
+// this computer's own traffic, not what it forwards, so it doesn't block them. Only traffic from that network is affected.
+// A container on the host's network sets it up: it takes no sudo, since whoever runs docker could do the same
+export const DIRECT_NETWORK = "windscout-direct";
+const TABLE = 2470; // ponytail: a routing table number nothing else is likely to use; the rules go at 89-90, before Windscribe's
+const ROUTE = `net=$1 t=$2
+while ip rule del from "$net" 2>/dev/null; do :; done
+ip route flush table "$t" 2>/dev/null
+[ "$3" = on ] || exit 0
+ip -4 route show table main default | sed -E 's/ (linkdown|dead|offload|trap|rt_offload|rt_trap|pervasive|notify)//g' |
+  while read -r r; do case "$r" in *" via "*) ip route add $r onlink table "$t" ;; *) ip route add $r table "$t" ;; esac; done
+[ -n "$(ip -4 route show table "$t")" ] || { echo "this computer has no default route to send them out by" >&2; exit 1; }
+ip rule add from "$net" to "$net" lookup main priority 89
+ip rule add from "$net" lookup "$t" priority 90`;
+let routed = ""; // the network routed around the VPN, until unroute()
+let routing: Promise<unknown> = Promise.resolve(); // one change at a time: a rule taken away as it's put in could stay
+const oneAtATime = <T>(change: () => Promise<T>): Promise<T> => {
+  const p = routing.then(change);
+  routing = p.catch(() => {});
+  return p;
+};
+
+const route = (subnet: string, on: boolean) =>
+  ["run", "--rm", "--network", "host", "--cap-add", "NET_ADMIN", "--entrypoint", "sh", IMAGE, "-c", ROUTE, "route", subnet, String(TABLE), on ? "on" : "off"];
+
+/** windscout's own docker network for the background checks, created the first time; resolves to its subnet */
+export async function directNetwork(): Promise<string> {
+  const subnet = async () => (await docker(["network", "inspect", "-f", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", DIRECT_NETWORK]))
+    .out.split(/\s+/).find((s) => /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(s)) ?? "";
+  if (!(await subnet())) await docker(["network", "create", DIRECT_NETWORK]);
+  const s = await subnet();
+  if (!s) throw new Error("couldn't create windscout's docker network");
+  return s;
+}
+
+/** Sends the traffic from the subnet out the way this computer goes without the VPN; again before each check, since the
+ * network may have changed (another Wi-Fi, another gateway) */
+export const routeAround = (subnet: string) => oneAtATime(async () => {
+  routed = subnet; // before it's in: a crash meanwhile takes it away
+  const r = await docker(route(subnet, true), { timeout: 60_000 });
+  if (r.code) throw new Error(`couldn't route the containers around your VPN: ${lastLine(r.out) || `exit ${r.code}`}`);
+});
+
+/** Takes routeAround()'s rules and table away */
+export const unroute = () => oneAtATime(async () => {
+  if (routed) await docker(route(routed, false), { timeout: 60_000 });
+  routed = "";
+});
+// a crash or a force quit: take the rule away on the way out (it only touches that network's traffic, so it's harmless if not)
+process.on("exit", () => routed && spawnSync("docker", route(routed, false), { stdio: "ignore", timeout: 30_000 }));

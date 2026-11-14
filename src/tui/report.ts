@@ -1,9 +1,10 @@
 // The final report, printed to the normal screen so it stays in the scrollback.
-import { sortOk, target, type Result } from "../probe.js";
+import { sortOk, target, type Entry, type Result } from "../probe.js";
+import { ago } from "../time.js";
 import { CLI } from "../windscribe.js";
 import { flag } from "./country.js";
 import { matrix, resultTable } from "./tables.js";
-import { bold, cyan, dim, fmt, green, vw, yellow } from "./text.js";
+import { bold, cyan, dim, fmt, green, red, vw, yellow } from "./text.js";
 import { box, grid } from "./widgets.js";
 
 export interface ReportOptions {
@@ -73,4 +74,19 @@ export function report(results: Result[], protocols: readonly string[], { all, s
   ], { title: green(speedTest ? "★ Best" : "★ Best (lowest latency)"), width: width - 4 }).join("\n"));
   if (rest.length) console.log(rest.join("\n"));
   return [b, ...others];
+}
+
+/** Prints the list as the results screen left it, best first, as windscout connect will try it: on the way out, when it
+ * changed there (a test, a drop, a background check) */
+export function printList(list: Entry[]): void {
+  if (!list.length) return;
+  const speeds = list.some((e) => e.speedMbps !== null);
+  console.log(grid(
+    [{ title: "#", align: "right" }, { title: "Location" }, { title: "Protocol" }, { title: "Latency", align: "right" },
+      ...(speeds ? [{ title: "Speed", align: "right" as const }] : []), { title: "Last check" }],
+    list.map((e, i) => [dim(String(i + 1)), `${flag(e.query)} ${e.location || e.query}`, e.protocol,
+      e.latencyMs === null ? "-" : `${fmt(e.latencyMs, 0)} ms`, ...(speeds ? [e.speedMbps === null ? "-" : `${fmt(e.speedMbps, 1)} Mbps`] : []),
+      e.failed ? red(`✗ ${e.failed} · ${ago(e.failedAt ?? Date.now())}`) : e.checked ? green(`✓ ${ago(e.checked)}`) : dim("✓ in the scan")]),
+    { caption: `${bold("Your connections now")} ${dim("· saved: windscout connect tries them in this order")}`, minWidth: 64 },
+  ).join("\n"));
 }

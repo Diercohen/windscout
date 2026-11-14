@@ -2,7 +2,7 @@
 
 Find which Windscribe locations and protocols actually work from your network, ranked by speed. Runs on Linux, macOS and Windows.
 
-WindScout drives the official `windscribe-cli`: it connects to each country × protocol pair, measures latency and download speed through the tunnel, disconnects, and prints a ranked table.
+WindScout drives the official `windscribe-cli`: it connects to each country × protocol pair, measures latency and download speed through the tunnel, disconnects, and prints a ranked table. Then the [results screen](#results-screen-connect-test-again-stay-connected) stays open: connect to one, test them all again, and let WindScout keep you connected.
 
 ![WindScout picking countries, scanning, and printing the availability grid and ranked results](demo.gif)
 
@@ -12,7 +12,7 @@ WindScout drives the official `windscribe-cli`: it connects to each country × p
 
 - Linux, macOS or Windows 10/11
 - Node.js 20+
-- The [Windscribe desktop app](https://windscribe.com/download) installed, running and logged in. It includes `windscribe-cli`, which WindScout uses to control the app. Check with `windscribe-cli status`, which should show `Logged in`. On Windows the app doesn't put the CLI on `PATH`, so run `"C:\Program Files\Windscribe\windscribe-cli.exe" status` instead. WindScout finds it there on its own.
+- The [Windscribe desktop app](https://windscribe.com/download) installed, running and logged in. It includes `windscribe-cli`, which WindScout uses to control the app. Check with `windscribe-cli status`, which should show `Logged in`. Any recent version works: 2.25 reworded that status (`Connection:` instead of `Connect state:`, among others), and WindScout reads both wordings. On Windows the app doesn't put the CLI on `PATH`, so run `"C:\Program Files\Windscribe\windscribe-cli.exe" status` instead. WindScout finds it there on its own.
 - Optional, for [parallel scans](#parallel-scan-with-docker): Docker. WindScout offers to install it.
 
 ## Install
@@ -117,7 +117,7 @@ Run `windscout` with no arguments to open the interactive picker:
 
 Your selection is saved to `~/.config/windscout/config.json` (`%USERPROFILE%\.config\windscout\config.json` on Windows) and preselected next time.
 
-After you start, the Start button spins (`[ ⠋ Starting… ]`) until the scan's screen shows, which can take a moment when it turns the firewall on or starts docker. While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. At the prompt, press enter or `0` to connect to the best one, type another one's number and press enter to connect to that, or press `q` to quit. `0` and `q` work right away, without enter. When the one you chose doesn't connect, the next ones are tried, and once one is up, WindScout [watches it](#last-result-rescan-and-connect).
+After you start, the Start button spins (`[ ⠋ Starting… ]`) until the scan's screen shows, which can take a moment when it turns the firewall on or starts docker. While scanning, WindScout shows a progress bar, elapsed time and remaining time. It also shows what it's doing right now (connecting, measuring latency or measuring speed). The table of working locations refreshes after each country. When the scan finishes, the final report is printed to your normal terminal. It ends with the best connection and the other working ones, each with its `windscribe-cli connect` command. Then the [results screen](#results-screen-connect-test-again-stay-connected) opens over it, and WindScout stays open until you quit. The report is still there in your terminal afterwards.
 
 ### Non-interactive
 
@@ -145,16 +145,84 @@ windscout -t 40 -a                          # longer connect timeout, also list 
 | `-d, --docker` | [scan in parallel, in docker containers](#parallel-scan-with-docker) | picker: saved, or off; with `-c`: off |
 | `-v, --version` | print the installed version; if a newer one is on npm, show the update command (with `sudo` when needed) and ask (y/n) to run it | |
 
+Without a terminal, WindScout prints the report and exits, with no results screen.
+
+## Results screen: connect, test again, stay connected
+
+In a terminal, the scan's working connections stay on screen after the report, best first:
+
+```
+╭─ WindScout ─────────────────────────────────────────────────── 4 working · scanned 2m ago ─╮
+│                                                                                            │
+│    ● CONNECTED   🇳🇱 Amsterdam - Canal over stealth:443                                     │
+│   up 12m 07s · 106 ms ▄██▁▂▁ · IP 185.x.x.x · connected again 1×                           │
+│                                                                                            │
+├────────────────────────────────────────────────────────────────────────────────────────────┤
+│  ◉ watch on · when this connection drops, windscout connects you to the next best          │
+│  ◉ background checks · 3 of 3 worked 2m ago · next in 3m 00s                               │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Working connections                                               by speed · o: by latency │
+├─────┬─────────────────────────────┬─────────────┬─────────┬───────────┬────────────────────┤
+│   # │ Location                    │ Protocol    │ Latency │     Speed │ Status             │
+├─────┼─────────────────────────────┼─────────────┼─────────┼───────────┼────────────────────┤
+│ ❯ 1 │ 🇩🇪 Frankfurt - Castle       │ wireguard   │  105 ms │ 48.2 Mbps │ ✓ 2m ago           │
+│   2 │ 🇳🇱 Amsterdam - Canal        │ stealth:443 │  107 ms │ 31.7 Mbps │ ● connected        │
+│   3 │ 🇹🇷 Istanbul - Bosphorus     │ tcp:443     │   61 ms │ 12.4 Mbps │ ✓ 2m ago           │
+│   4 │ 🇫🇷 Paris - Seine            │ udp         │  120 ms │ 22.1 Mbps │ ✗ timeout · 5m ago │
+╰─────┴─────────────────────────────┴─────────────┴─────────┴───────────┴────────────────────╯
+      [ ▶ Connect ]  [ Disconnect ]  [ Speed test all ]  [ Latency test all ]  [ Watch: on ]
+                                      [ New scan ]  [ Quit ]
+```
+
+| Key | Action |
+|---|---|
+| `↑` `↓` / `j` `k`, PgUp/PgDn, Home/End | move |
+| `enter` | connect to the selected one |
+| `d` | disconnect |
+| `s` | speed test them all again; it first says how long that takes and how much it downloads (up to 10 MB each), and `s` again starts it |
+| `l` | latency test them all again (no downloads); `l` again starts it |
+| `o` | sort by speed or by latency |
+| `w` | watch on or off |
+| `b` | background checks on or off |
+| `n` | new scan: back to the picker, with your saved settings |
+| `esc` | stop what's running (a test, or connecting); with nothing running, quit |
+| `q` | quit; the VPN stays as it is (press again to quit right away) |
+
+**Mouse:** click a row to select it, double-click it to connect, scroll with the wheel. The buttons do the same as their keys.
+
+**Where you're connected** is the box on top: a green `● CONNECTED` with the location, protocol, how long it's been up, its latency (checked every 3 s, with the last round trips as a sparkline), the VPN's IP, and how many times WindScout connected you again. While connecting, it shows each step and the time against the timeout. `▲ CONNECTION LOST` shows while it connects you again, `✗ NONE CONNECT NOW` when none of them does, and `● CONNECTED IN THE APP` when you connected in the Windscribe app yourself (WindScout doesn't watch that one). The terminal window's title says it too, for when the terminal is behind another window. The box also shows the last two things that happened, with the time, on a tall enough terminal.
+
+**Connecting:** when the one you chose doesn't connect, WindScout goes back to the one you were on, if any, else it tries the next ones in the list, around to the one before it. The one that didn't connect goes to the end of the list, marked ✗ with why and when.
+
+**Testing them all again** (`s` or `l`) goes through the list one at a time on this computer, as a scan does: it connects, measures, disconnects. Your VPN switches as it goes. Afterwards the list is ranked by what the test found, and WindScout connects you back to the one you had if it still works, else to the best. When you stop the test (`esc`), it connects you back too. The ones that didn't connect go to the end, marked ✗: they may work again later, and the next test tries them again. When none connects, that's your network rather than them, so the list stays as it was.
+
+**Watching** (on by default, remembered) keeps you connected. Every 3 s it checks the connection: still connected, with internet through it. After 3 misses in a row, it connects again. If the connection had lasted 5 minutes, it tries the same one first; one that dropped sooner is likely blocked, so it goes to the end of the list and the next best is tried. When none connects, it waits 30 s and tries them all again from the best. Disconnecting or switching in the Windscribe app is yours to do: WindScout tells that from a drop by the app's own log (`~/.local/share/Windscribe/Windscribe2/client.log` on Linux) and leaves the VPN alone. Where it can't read that log, it takes your disconnect for a drop, so press `d` in WindScout instead. With watching off, a drop just shows (`▲ NO INTERNET`).
+
+**Background checks** (`b`, remembered; on by default once you've used [parallel scans](#parallel-scan-with-docker)) keep the list fresh while you stay connected. While watching, every 5 minutes, 3 docker containers connect to each connection in the list and measure its latency. Your own VPN connection isn't touched, and nothing pops up: only the line in the box says what they're doing. They skip the one you're on, since the watch checks it already, and they don't run a speed test, since that would cost data. What works gets its new latency, and what doesn't goes to the end of the list. A check where nothing worked changes nothing. The first check comes 5 minutes after the scan, or right away for an older saved list. The containers stay up between checks, at about 120 MB each, and go away when you turn the checks off, quit, or start a new scan. If docker isn't set up, `b` offers to install or start it, as `d` in the picker does.
+
+The containers have to go out on your own network, not through your VPN: through it, they'd test from the VPN's server and everything would look like it works.
+
+- **Docker on Linux:** WindScout puts them on a docker network of their own, `windscout-direct`. A routing rule then sends that network's traffic out your normal gateway: routing table 2470, at rule priorities 89-90, set up by a short-lived container on the host network. Only that network's traffic is affected. Windscribe's firewall filters this computer's own traffic, not what it forwards, so it doesn't block them. The rule goes away when the checks stop.
+- **Docker Desktop** (macOS, Windows) sends its containers' traffic through your VPN, and WindScout can't route around that.
+
+Either way, before each check WindScout compares the containers' outside IP with your VPN's. If they're the same, it turns the checks off and says why. With Docker Desktop, excluding docker in Windscribe's split tunneling lets the checks run.
+
+**Quitting** leaves the VPN as it is. If you quit while connecting to one you chose, that attempt finishes first. If you quit during a test, it connects you back to the one you had first. Press `q` again to quit right away. On the way out, WindScout prints the list as it is now (when it changed) and whether you're connected.
+
+**New scan** (`n`): WindScout stops what's running and the background checks, then opens the picker with your saved settings. When you're connected, it asks first, since the scan switches your VPN (it disconnects it before it starts).
+
+The list is [saved](#last-result-rescan-and-connect) as it changes, so `windscout connect` and the scanning types by the last result use what the screen found.
+
 ## Last result: rescan and connect
 
-After each scan, WindScout saves its working connections, best first, to `~/.config/windscout/last.json`. That includes a partial scan you stopped, and a scan started with `-c`. A scan's working connections replace the saved ones it tried, so the ones that stopped working drop out. The saved connections it didn't try stay, after its own: those of countries it didn't scan, and what a stopped scan didn't get to. A scan where nothing worked keeps the previous result as it is, since the network may just be down.
+After each scan, WindScout saves its working connections, best first, to `~/.config/windscout/last.json`, and the [results screen](#results-screen-connect-test-again-stay-connected) updates them as it learns more. The ones whose last check didn't connect stay, at the end, marked with why: they may work again. Versions before 0.9.0 read those as working ones, and try them last. That includes a partial scan you stopped, and a scan started with `-c`. A scan's working connections replace the saved ones it tried, so the ones that stopped working drop out. The saved connections it didn't try stay, after its own: those of countries it didn't scan, and what a stopped scan didn't get to. A scan where nothing worked keeps the previous result as it is, since the network may just be down.
 
 - **Rescan:** the [scanning types](#scanning-type) *by last success result first* and *only the last results* use the saved connections: the first tries the ones in your selection before the rest of it, the second tries only them.
-- **Connect:** `windscout connect` connects to the best saved connection, without a scan. It checks each as the scan does: when one doesn't connect within the timeout (`-t`, or the saved one), or has no internet through it, it tries the next, until one connects. When none does, or there's no saved scan, it says so and suggests a rescan or a new scan.
-- **Watching:** in a terminal, once a connection is up (from `windscout connect`, or the connect prompt after a scan), WindScout stays and watches it. Every 3 s it checks that the app is still connected, with internet through it, and a line shows how long it's been up and its latency. When 3 checks in a row find it down, it connects again: to the same one first if it had lasted 5 minutes, else to the next ones first, and to the one that dropped last. When none connects, it waits 30 s and tries them all again, from the best. Each drop is printed with the time it was noticed. Press `q` to stop watching: the VPN stays as it is. Disconnecting in the app (or with `windscribe-cli disconnect`), connecting it somewhere else, or quitting it stops the watching too, within a check or two, and WindScout leaves the VPN alone: it tells those apart from a drop by the app's own log (`~/.local/share/Windscribe/Windscribe2/client.log` on Linux). If you quit the app, WindScout's next check starts it again, as any `windscribe-cli` command does. Where WindScout can't read that log, it takes your disconnect for a drop and connects you again, so press `q` first. Without a terminal, `windscout connect` connects and exits.
+- **Connect:** `windscout connect` connects to the best saved connection, without a scan. It checks each as the scan does: when one doesn't connect within the timeout (`-t`, or the saved one), or has no internet through it, it tries the next, until one connects. In a terminal, that happens on the [results screen](#results-screen-connect-test-again-stay-connected), which then keeps you connected (`n` there starts a scan). Without a terminal, it connects and exits. When none connects, or there's no saved scan, it says so and suggests a rescan or a new scan.
 
 ```sh
-windscout connect          # the best saved connection that still works, then watch it
+windscout connect          # the best saved connection that still works, on the results screen
 windscout connect -t 30    # wait longer for each
 ```
 
@@ -315,7 +383,7 @@ The source is TypeScript in `src/`. It compiles to `dist/`, which is what gets p
 ```sh
 npm install
 npm run build       # compile src/ to dist/ (the windscout command is dist/cli.js)
-npm test            # build, then check the scan's scheduling (no VPN, no docker)
+npm test            # build, then check the scan, the results screen's keeper and the status parsing (no VPN, no docker)
 node dist/cli.js    # run your build; takes the same options as windscout
 ./publish.sh        # build, install the packed tarball to check it runs, publish to npm (bump the version first)
 ```

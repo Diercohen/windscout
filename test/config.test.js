@@ -67,3 +67,30 @@ test("the last result's working connections are saved best first, a scan keeps t
   writeFileSync(LAST_FILE, "not json");
   assert.equal(loadLast(), null);
 });
+
+test("the results screen saves the list with the ones whose last check failed at the end, after the saved ones it didn't have", async () => {
+  const { loadLast, saveLast, LAST_FILE } = await import("../dist/config.js");
+  rmSync(LAST_FILE, { force: true });
+  const ok = (query, protocol, extra = {}) => ({ query, protocol, location: "", connectS: 1, latencyMs: 40, speedMbps: null, status: "ok", ...extra });
+  saveLast([ok("DE", "tcp"), ok("NL", "udp")], 1000);
+  const failed = ok("FR", "udp", { failed: "timeout", failedAt: 1500 });
+  saveLast([ok("TR", "stealth", { checked: 1600 }), failed], 2000, new Set(["TR stealth", "FR udp", "DE tcp"]));
+  assert.deepEqual(loadLast().results.map((r) => r.query), ["TR", "NL", "FR"]);
+  assert.equal(loadLast().results[2].failed, "timeout"); // older versions read it as a working one, and try it last
+  assert.equal(loadLast().results[0].checked, 1600);
+});
+
+test("settings are merged into the saved ones, and the results screen's start as watch on, background checks as docker is", async () => {
+  const { loadConfig, loadSettings, saveConfig } = await import("../dist/config.js");
+  rmSync(CONFIG, { force: true });
+  assert.deepEqual(loadSettings(), { watch: true, background: false });
+  saveConfig({ countries: ["DE"], protocols: ["tcp"], docker: true });
+  assert.deepEqual(loadSettings(), { watch: true, background: true });
+  saveConfig({ watch: false, background: false });
+  assert.deepEqual(loadSettings(), { watch: false, background: false });
+  assert.deepEqual([loadConfig().countries, loadConfig().docker], [["DE"], true]); // the picker's are still there
+  saveConfig({ countries: ["NL"] }); // the picker saving keeps the results screen's
+  assert.deepEqual(loadSettings(), { watch: false, background: false });
+  writeFileSync(CONFIG, "not json");
+  assert.deepEqual(loadSettings(), { watch: true, background: false });
+});

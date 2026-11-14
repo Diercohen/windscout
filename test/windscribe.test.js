@@ -38,3 +38,47 @@ test("all ports: each protocol without a port goes on every port the app lists, 
   assert.deepEqual(withPorts(["tcp", "stealth:8443", "wstunnel", "ikev2", "stealth"], lists),
     ["tcp:443", "tcp:587", "stealth:8443", "wstunnel:443", "ikev2", "stealth"]);
 });
+
+// windscribe-cli status, as the apps before 2.25 print it (macOS marks the connect state while it checks) and as 2.25 and newer do
+const OLD = `Windscribe CLI client v2.24.4
+*Connect state: Connected: Toronto - The 6 [Network interference]
+Protocol: wireguard:443
+VPN IP: 104.254.92.10
+Firewall state: On
+Login state: Logged in
+`;
+// (2.25.8 pads the labels to one width, and Windows ends lines with \r\n)
+const NEW = `Login:       Logged in\r
+Connection:  Connected to Toronto - The 6 (checking the connection)\r
+Protocol:    wireguard:443\r
+IP:          104.254.92.10 (VPN)\r
+Firewall:    Always On\r
+Data usage:  1.15 TB / Unlimited\r
+Internet:    Available\r
+`;
+
+test("status: either app version's wording reads the same", async () => {
+  const { connectStateOf, isFirewallOn, loginState, place, publicIpOf, statusValue, vpnIpOf } = await import("../dist/windscribe.js");
+  for (const status of [OLD, NEW]) {
+    assert.equal(connectStateOf(status), "Connected: Toronto - The 6");
+    assert.equal(place(connectStateOf(status)), "Toronto - The 6");
+    assert.equal(loginState(status), "Logged in");
+    assert.equal(isFirewallOn(status), true);
+    assert.equal(vpnIpOf(status), "104.254.92.10");
+    assert.equal(publicIpOf(status), "");
+  }
+  assert.equal(connectStateOf("Connection: Connecting to Miami - Vice\n"), "Connecting: Miami - Vice");
+  assert.equal(connectStateOf("Connect state: Connecting: Miami - Vice\n"), "Connecting: Miami - Vice");
+  assert.equal(connectStateOf("Connection: Connected to Miami - Vice (network interference detected)\n"), "Connected: Miami - Vice");
+  for (const state of ["Disconnected", "Disconnecting", "Error: Location does not exist or is disabled"]) {
+    assert.equal(connectStateOf(`Login: Logged in\nConnection: ${state}\n`), state);
+    assert.equal(connectStateOf(`Login state: Logged in\nConnect state: ${state}\n`), state);
+  }
+  assert.equal(publicIpOf("Connection: Disconnected\nIP: 1.2.3.4 (public)\n"), "1.2.3.4");
+  assert.equal(publicIpOf("Connect state: Disconnected\nPublic IP: 1.2.3.4\n"), "1.2.3.4");
+  assert.equal(isFirewallOn("Firewall: Off\n"), false);
+  assert.equal(isFirewallOn("Firewall state: Off\n"), false);
+  assert.equal(statusValue("Login: Logged in\n", "firewall"), ""); // not there
+  assert.equal(loginState("Login state: Logging in\n"), "Logging in");
+  assert.equal(connectStateOf(""), ""); // the app didn't answer
+});

@@ -3,7 +3,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Result } from "./probe.js";
+import type { Entry, Result } from "./probe.js";
 import { ORDERS, type Order } from "./scan.js";
 import { COUNTRIES, PROTOCOLS } from "./windscribe.js";
 
@@ -54,11 +54,33 @@ export function loadConfig(): Choice | null {
   }
 }
 
-export function saveConfig(c: Choice): void {
+/** Saves these settings over the saved ones: the rest of the file stays (the results screen's, the picker's) */
+export function saveConfig(c: Partial<Choice & Settings>): void {
+  let saved = {};
+  try {
+    saved = JSON.parse(readFileSync(CONFIG, "utf8"));
+  } catch {} // first run, or unreadable: start over
   try {
     mkdirSync(dirname(CONFIG), { recursive: true });
-    writeFileSync(CONFIG, JSON.stringify(c, null, 2) + "\n");
+    writeFileSync(CONFIG, JSON.stringify({ ...saved, ...c }, null, 2) + "\n");
   } catch {} // not being able to remember isn't worth failing the scan
+}
+
+/** The results screen's settings */
+export interface Settings {
+  watch: boolean; // when the connection drops, connect to the next best
+  background: boolean; // while watching, check the list in docker containers every few minutes
+}
+
+/** The results screen's saved settings: watching on until turned off; background checks as docker is for parallel scans until
+ * turned on or off on that screen */
+export function loadSettings(): Settings {
+  try {
+    const c = JSON.parse(readFileSync(CONFIG, "utf8"));
+    return { watch: c.watch !== false, background: typeof c.background === "boolean" ? c.background : c.docker === true };
+  } catch {
+    return { watch: true, background: false };
+  }
 }
 
 /** Whether WireGuard worked in the docker containers last time (yes until a scan finds otherwise), for the picker's estimate */
@@ -96,10 +118,12 @@ export function saveView(view: View): void {
   } catch {} // not being able to remember isn't worth failing the scan
 }
 
-/** The last scan's working connections, best first (as the report numbers them), for the scanning types and windscout connect */
+/** The last scan's working connections, best first (as the results screen ranks them), for the scanning types and windscout
+ * connect. Those whose last check didn't get through (failed) are kept, at the end: they may work again later. Apps before
+ * 0.9.0 read them as working ones, and try them last */
 export interface Last {
-  at: number; // when the scan ended, ms since the epoch
-  results: Result[];
+  at: number; // when the scan ended, or the results screen last changed the list, ms since the epoch
+  results: Entry[];
 }
 
 /** The last scan that found something; null when there's none or the file is unreadable */
@@ -114,10 +138,12 @@ export function loadLast(): Last | null {
 }
 
 /** Saves a scan's working connections; a scan where nothing worked keeps the last one that found something (the network may
- * just be down). With tried (the "query protocol" pairs the scan tried), the saved connections it didn't try stay, after its own */
-export function saveLast(results: Result[], at = Date.now(), tried?: ReadonlySet<string>): void {
+ * just be down). With tried (the "query protocol" pairs the scan tried), the saved connections it didn't try stay, after its own
+ * working ones and before the ones whose last check failed */
+export function saveLast(results: Entry[], at = Date.now(), tried?: ReadonlySet<string>): void {
   if (!results.length) return;
-  if (tried) results = [...results, ...(loadLast()?.results ?? []).filter((r) => !tried.has(`${r.query} ${r.protocol}`))];
+  const all = [...results, ...(tried ? (loadLast()?.results ?? []).filter((r) => !tried.has(`${r.query} ${r.protocol}`)) : [])];
+  results = [...all.filter((r) => !r.failed), ...all.filter((r) => r.failed)];
   try {
     mkdirSync(dirname(LAST_FILE), { recursive: true });
     writeFileSync(LAST_FILE, JSON.stringify({ at, results }, null, 2) + "\n");

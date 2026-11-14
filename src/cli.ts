@@ -2,35 +2,42 @@
 // WindScout: find which Windscribe locations and protocols actually work from here.
 // Drives the official windscribe-cli: connects to each country/protocol pair,
 // measures latency and download speed through the tunnel, prints a ranked table.
+// In a terminal, the results then stay on screen (tui/results.ts): connect, test again, and stay connected.
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
+import { dockerChecker } from "./background.js";
 import { CONFIG, DEFAULT_HOLD, DEFAULT_TIMEOUT, forgetLogin, LAST_FILE, loadConfig, loadDockerWireGuard, loadLast, MIN_HOLD, MIN_TIMEOUT, saveDockerWireGuard, saveLast, SPEED_TEST } from "./config.js";
 import { notInContainers, stopWorkers } from "./docker.js";
-import { disconnect, MIN_MBPS, probe, type Result } from "./probe.js";
+import { disconnect, MIN_MBPS, probe, type Entry } from "./probe.js";
 import { ORDERS, plan, Scan, type Order } from "./scan.js";
-import { connectFrom, watch } from "./tui/connect.js";
+import { connectFrom } from "./tui/connect.js";
 import { startParallel } from "./tui/docker.js";
 import { pick } from "./tui/picker.js";
 import { logProgress, showProgress } from "./tui/progress.js";
 import { report } from "./tui/report.js";
+import { showResults } from "./tui/results.js";
 import { leaveScreen, out } from "./tui/terminal.js";
 import { green, yellow } from "./tui/text.js";
 import { duration } from "./time.js";
 import { canUpdate, checkUpdate, runUpdate, updateNotice, versionLines } from "./update.js";
-import { blockInternet, CLI, isFirewallOn, protocolPorts, PROTOCOLS, restoreFirewall, waitForLogin, windscribe, withPorts } from "./windscribe.js";
+import { blockInternet, CLI, isFirewallOn, protocolPorts, PROTOCOLS, restoreFirewall, waitForLogin, withPorts } from "./windscribe.js";
 import { worker } from "./worker.js";
+import { CHECK_EVERY } from "./watch.js";
 
 const HELP = `Usage: windscout [options]
        windscout connect [-t SEC]
 
 Find which Windscribe locations and protocols work from your network, ranked by ${SPEED_TEST ? "speed" : "latency"}.
 Without -c it opens an interactive country picker (your selection is remembered).
+In a terminal, the results then stay on screen until you quit: connect to one (the screen shows
+where you're connected, live), test them all again for speed or latency (what doesn't connect
+goes to the end of the list), and watch the connection: when it drops, windscout connects you to
+the next best. While watching, docker containers can check the list every ${duration(CHECK_EVERY)} without touching
+your VPN (b there; latency only). n there starts a new scan; q quits and leaves the VPN as it is.
 Each scan's working connections are saved: the scanning type (-o, or o in the picker) can try
-them first or only them, and windscout connect connects to the best of them that still works.
-In a terminal, windscout then watches the connection (also after the connect prompt at the end of
-a scan): when it drops, it connects again, to the same one or the next. q stops watching, and so
-does disconnecting or switching location in the app.
+them first or only them, and windscout connect connects to the best of them that still works
+(in a terminal, on the results screen).
 
 Options:
   -c, --countries LIST  comma-separated ISO codes, city names or nicknames (skips the picker)
@@ -69,28 +76,9 @@ const ask = (question: string, instant: string[] = []) => new Promise<string | n
   rl.question(question, (a) => (resolve(a.trim()), rl.close()));
 });
 
-/** Asks which numbered connection to make (enter: the best), then connects to it, or when it doesn't connect, to the next
- * ones, and watches it. 0 and q need no enter; the other numbers do, since 1 may be the start of 10 */
-async function offerConnect(choices: Result[], timeout: number): Promise<void> {
-  const others = choices.length > 2 ? `, 1-${choices.length - 1} = other` : choices.length > 1 ? ", 1 = other" : "";
-  for (;;) {
-    const a = await ask(`\nconnect to # (enter or 0 = best${others}, q = quit): `, ["0", "q"]);
-    if (a === null || /^q(uit)?$/i.test(a)) return;
-    const n = a === "" ? 0 : /^\d+$/.test(a) ? Number(a) : -1;
-    if (!choices[n]) {
-      console.log(yellow(`no #${a} in the tables`));
-      continue;
-    }
-    const i = await connectFrom(choices, n, timeout);
-    if (i < 0) console.log(yellow(`\nnone of them connects now: ${RESCAN_HINT}`));
-    else await watch(choices, i, timeout);
-    return;
-  }
-}
-
 const RESCAN_HINT = "rescan them with windscout -o last-only, or start a new scan";
 
-/** windscout connect: the last result's connections, best first, until one connects; then, in a terminal, watches it */
+/** windscout connect without a terminal: the last result's connections, best first, until one connects */
 async function connectLast(timeout: number): Promise<void> {
   const last = loadLast();
   if (!last) {
@@ -104,7 +92,7 @@ async function connectLast(timeout: number): Promise<void> {
   if (i < 0) {
     console.log(yellow(`\nnone of the last result's ${last.results.length} connection${last.results.length === 1 ? "" : "s"} works now: ${RESCAN_HINT}`));
     process.exitCode = 1;
-  } else if (process.stdin.isTTY && out.isTTY) await watch(last.results, i, timeout);
+  }
 }
 
 /** u in the picker: update, then run the new version in this one's place, with the same arguments */
@@ -117,6 +105,120 @@ function updateAndRestart(): void {
   }
   console.log(green("updated · restarting windscout"));
   process.exitCode = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], { stdio: "inherit" }).status ?? 1;
+}
+
+/** What a scan takes from the command line; a later scan (n on the results screen) takes none of it but -a, and the picker
+ * opens with what was saved instead */
+interface Flags {
+  countries?: string[];
+  protocols?: readonly string[];
+  timeout?: number;
+  hold?: number;
+  order?: Order;
+  speedTest: boolean;
+  firewall: boolean;
+  stopAtFirst: boolean;
+  allPorts: boolean;
+  docker: boolean;
+  all: boolean;
+}
+
+/** One scan: the picker (unless -c), then the scan, its report, and its working connections saved. Resolves to them, best
+ * first, and the timeout it used; null when the picker was left, "update" when u was pressed there */
+async function scanOnce(f: Flags, tty: boolean): Promise<{ results: Entry[]; timeout: number } | null | "update"> {
+  const status = await waitForLogin();
+  let { countries, protocols, speedTest, firewall, order, stopAtFirst, allPorts, docker, timeout, hold } = f;
+  speedTest &&= SPEED_TEST;
+  const last = loadLast();
+  // only the last results needs no countries: without a terminal, it goes without the picker
+  if (!countries && !(order === "last-only" && !tty)) {
+    if (!tty) throw new Error("no terminal for the picker: pass countries with -c");
+    const saved = loadConfig();
+    if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
+    const choice = await pick(saved, {
+      timeout: timeout ?? saved?.timeout ?? DEFAULT_TIMEOUT,
+      speedTest: speedTest && (saved?.speed ?? false), // first run: connect-only
+      // already on in the app: show it on, since the scan won't turn it off
+      firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
+      order: order ?? saved?.order ?? "default",
+      stopAtFirst: stopAtFirst || (saved?.stopAtFirst ?? false),
+      hold: hold ?? saved?.hold ?? DEFAULT_HOLD,
+      allPorts: allPorts || (saved?.allPorts ?? false),
+      docker: docker || (saved?.docker ?? false),
+      last,
+    });
+    if (!choice || choice === "update") return choice;
+    countries = choice.countries;
+    protocols ??= choice.protocols;
+    speedTest = choice.speed;
+    firewall = choice.firewall;
+    order = choice.order;
+    stopAtFirst = choice.stopAtFirst;
+    hold = choice.hold;
+    allPorts = choice.allPorts;
+    timeout = choice.timeout;
+    docker = choice.docker;
+  }
+  countries ??= [];
+  protocols ??= PROTOCOLS;
+  timeout ??= DEFAULT_TIMEOUT;
+  hold ??= DEFAULT_HOLD;
+  order ??= "default";
+  const byLast = order === "last-first" || order === "last-only"; // a type by the last result: it needs a saved scan
+  if (byLast && !last) throw new Error(`no saved scan yet: -o ${order} needs one, so run a scan with another scanning type first`);
+  const fromLast = byLast ? last : null; // the saved connections this scan uses
+  // the picker asked for the ports already: waiting for that keeps windscribe-cli free for the scan.
+  // The saved connections need them too, to tell a saved "tcp:443" from tcp on its default port
+  const lists = allPorts || !f.countries || fromLast ? await protocolPorts() : undefined;
+  if (allPorts && lists) protocols = withPorts(protocols, lists);
+  const attempts = plan(order, countries, protocols, fromLast?.results, lists);
+  // the tables' columns: the protocols asked for, and the saved connections' own (only those, when only they are scanned)
+  const scanned = [...new Set([...(order === "last-only" ? [] : protocols), ...attempts.map((x) => x.protocol)])];
+
+  // a parallel scan is the containers' alone: the protocols they can't run (IKEv2, WireGuard on some kernels) aren't tried
+  let probers = [probe], skipped = new Set<string>();
+  const inContainers = () => attempts.filter((x) => !skipped.has(x.protocol));
+  const nothingLeft = () => new Error(`the docker containers can't run ${[...skipped].join(" or ")}, and nothing else is selected:`
+    + " scan without --docker (d in the picker)");
+  if (docker && attempts.length) {
+    skipped = notInContainers(scanned, loadDockerWireGuard()); // as far as the last parallel scan knows
+    if (!inContainers().length) throw nothingLeft();
+    const started = await startParallel(inContainers().length);
+    if (!started) return leaveScreen(), null;
+    saveDockerWireGuard(started.wireguard);
+    probers = started.probers;
+    skipped = notInContainers(scanned, started.wireguard); // their kernel may not run WireGuard after all, or may now
+    if (!inContainers().length) {
+      await stopWorkers();
+      throw nothingLeft();
+    }
+  }
+  const scan = new Scan(countries, scanned.filter((p) => !skipped.has(p)), { timeout, speedTest, only: inContainers(), stopAtFirst: stopAtFirst ? hold : 0 }, probers);
+  // the scan switches the VPN anyway: one still up (from before, or the results screen) would read as its first attempt
+  // connecting, and with containers, it would carry their traffic too
+  if (scan.total) await disconnect();
+  // not with containers: their traffic goes out through this computer, and the firewall would block it
+  const blocking = firewall && !docker && (await blockInternet());
+  const view = tty ? showProgress(scan, blocking) : logProgress(scan);
+  await scan.run(view);
+  if (docker) await stopWorkers();
+  await restoreFirewall();
+  view.close();
+  for (const e of new Set(scan.errors)) console.error(yellow(e));
+  if (skipped.size) console.error(yellow(`not tried: ${[...skipped].join(", ")}, which the docker containers can't run (a scan without --docker can)`));
+  if (scan.found) console.log(green(`stopped at the first connection that held up: a speed test, ${duration(hold)} connected, a speed test again and a reconnect`));
+  else if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
+  // a slower one is never stopped at, so it isn't checked
+  else if (stopAtFirst && scan.results.some((r) => r.status === "ok"))
+    console.log(yellow(`none held up at ${MIN_MBPS} Mbps or more: the connections below are slower, and weren't checked for stability`));
+  const results = report(scan.results, scan.protocols, { all: f.all, speedTest: speedTest || stopAtFirst }); // stop at the first measures speed
+  // its working connections replace the saved ones it tried, so what stopped working drops out; the saved ones it didn't try
+  // (other countries, or what a stopped scan didn't get to) stay, after its own; a scan where nothing worked keeps the last
+  const tried = new Set(scan.results.filter((r) => r.status !== "interrupted").map((r) => `${r.query} ${r.protocol}`));
+  saveLast(results, undefined, tried);
+  await checkUpdate();
+  if (updateNotice()) console.error("\n" + versionLines().join("\n"));
+  return { results, timeout };
 }
 
 async function main(): Promise<void> {
@@ -156,112 +258,61 @@ async function main(): Promise<void> {
     if (canUpdate() && process.stdin.isTTY && out.isTTY && /^y(es)?$/i.test((await ask("update now? (y/n) ")) ?? "")) process.exitCode = runUpdate();
     return;
   }
-  let timeout = a.timeout ? Number(a.timeout) : undefined;
+  const timeout = a.timeout ? Number(a.timeout) : undefined;
   if (timeout !== undefined && !(timeout >= MIN_TIMEOUT)) throw new Error(`--timeout must be at least ${MIN_TIMEOUT} seconds`);
-  let hold = a.hold ? Number(a.hold) : undefined;
+  const hold = a.hold ? Number(a.hold) : undefined;
   if (hold !== undefined && !(hold >= MIN_HOLD)) throw new Error(`--hold must be at least ${MIN_HOLD} seconds`);
   if (a.order !== undefined && !ORDERS.includes(a.order as Order)) throw new Error(`--order must be one of: ${ORDERS.join(", ")}`);
-  if (subcommand === "connect") return connectLast(timeout ?? loadConfig()?.timeout ?? DEFAULT_TIMEOUT);
-
-  const status = await waitForLogin();
   const tty = Boolean(process.stdin.isTTY && out.isTTY);
-  let countries = a.countries ? list(a.countries) : undefined;
-  let protocols: readonly string[] | undefined = a.protocols ? list(a.protocols) : undefined;
-  let speedTest = SPEED_TEST && !a["no-speed"];
-  let firewall = a.firewall;
-  let order = (a.order ?? (a.random ? "random" : undefined)) as Order | undefined;
-  let stopAtFirst = a["stop-at-first"];
-  let allPorts = a["all-ports"];
-  let docker = a.docker;
-  const last = loadLast();
-  // only the last results needs no countries: without a terminal, it goes without the picker
-  if (!countries && !(order === "last-only" && !tty)) {
-    if (!tty) throw new Error("no terminal for the picker: pass countries with -c");
-    const saved = loadConfig();
-    if (protocols && saved) saved.protocols = protocols.filter((p) => PROTOCOLS.includes(p));
-    const choice = await pick(saved, {
-      timeout: timeout ?? saved?.timeout ?? DEFAULT_TIMEOUT,
-      speedTest: speedTest && (saved?.speed ?? false), // first run: connect-only
-      // already on in the app: show it on, since the scan won't turn it off
-      firewall: firewall || isFirewallOn(status) || (saved?.firewall ?? false),
-      order: order ?? saved?.order ?? "default",
-      stopAtFirst: stopAtFirst || (saved?.stopAtFirst ?? false),
-      hold: hold ?? saved?.hold ?? DEFAULT_HOLD,
-      allPorts: allPorts || (saved?.allPorts ?? false),
-      docker: docker || (saved?.docker ?? false),
-      last,
-    });
-    if (!choice) return;
-    if (choice === "update") return updateAndRestart();
-    countries = choice.countries;
-    protocols ??= choice.protocols;
-    speedTest = choice.speed;
-    firewall = choice.firewall;
-    order = choice.order;
-    stopAtFirst = choice.stopAtFirst;
-    hold = choice.hold;
-    allPorts = choice.allPorts;
-    timeout = choice.timeout;
-    docker = choice.docker;
-  }
-  countries ??= [];
-  protocols ??= PROTOCOLS;
-  timeout ??= DEFAULT_TIMEOUT;
-  hold ??= DEFAULT_HOLD;
-  order ??= "default";
-  const byLast = order === "last-first" || order === "last-only"; // a type by the last result: it needs a saved scan
-  if (byLast && !last) throw new Error(`no saved scan yet: -o ${order} needs one, so run a scan with another scanning type first`);
-  const fromLast = byLast ? last : null; // the saved connections this scan uses
-  // the picker asked for the ports already: waiting for that keeps windscribe-cli free for the scan.
-  // The saved connections need them too, to tell a saved "tcp:443" from tcp on its default port
-  const lists = allPorts || !a.countries || fromLast ? await protocolPorts() : undefined;
-  if (allPorts && lists) protocols = withPorts(protocols, lists);
-  const attempts = plan(order, countries, protocols, fromLast?.results, lists);
-  // the tables' columns: the protocols asked for, and the saved connections' own (only those, when only they are scanned)
-  const scanned = [...new Set([...(order === "last-only" ? [] : protocols), ...attempts.map((x) => x.protocol)])];
+  // a later scan: the picker, with what was saved
+  const again: Flags = { speedTest: true, firewall: false, stopAtFirst: false, allPorts: false, docker: false, all: a.all };
 
-  // a parallel scan is the containers' alone: the protocols they can't run (IKEv2, WireGuard on some kernels) aren't tried
-  let probers = [probe], skipped = new Set<string>();
-  const inContainers = () => attempts.filter((x) => !skipped.has(x.protocol));
-  const nothingLeft = () => new Error(`the docker containers can't run ${[...skipped].join(" or ")}, and nothing else is selected:`
-    + " scan without --docker (d in the picker)");
-  if (docker && attempts.length) {
-    skipped = notInContainers(scanned, loadDockerWireGuard()); // as far as the last parallel scan knows
-    if (!inContainers().length) throw nothingLeft();
-    const started = await startParallel(inContainers().length);
-    if (!started) return leaveScreen();
-    saveDockerWireGuard(started.wireguard);
-    probers = started.probers;
-    skipped = notInContainers(scanned, started.wireguard); // their kernel may not run WireGuard after all, or may now
-    if (!inContainers().length) {
-      await stopWorkers();
-      throw nothingLeft();
+  let flags: Flags = {
+    countries: a.countries ? list(a.countries) : undefined,
+    protocols: a.protocols ? list(a.protocols) : undefined,
+    timeout,
+    hold,
+    order: (a.order ?? (a.random ? "random" : undefined)) as Order | undefined,
+    speedTest: !a["no-speed"],
+    firewall: a.firewall,
+    stopAtFirst: a["stop-at-first"],
+    allPorts: a["all-ports"],
+    docker: a.docker,
+    all: a.all,
+  };
+  if (subcommand === "connect") {
+    const t = timeout ?? loadConfig()?.timeout ?? DEFAULT_TIMEOUT;
+    if (!tty) return connectLast(t);
+    const last = loadLast();
+    if (!last) {
+      console.log(yellow("no saved scan yet: run windscout to scan first"));
+      process.exitCode = 1;
+      return;
     }
-    await windscribe("disconnect"); // a VPN connection here would carry the containers' traffic too
+    await waitForLogin();
+    // the best that still works, on the results screen, which keeps you connected
+    const to = await showResults({ entries: last.results, at: last.at, timeout: t, saved: true, connect: true, checker: () => dockerChecker(t) });
+    if (to === "quit") return;
+    flags = again;
   }
-  const scan = new Scan(countries, scanned.filter((p) => !skipped.has(p)), { timeout, speedTest, only: inContainers(), stopAtFirst: stopAtFirst ? hold : 0 }, probers);
-  // not with containers: their traffic goes out through this computer, and the firewall would block it
-  const blocking = firewall && !docker && (await blockInternet());
-  const view = tty ? showProgress(scan, blocking) : logProgress(scan);
-  await scan.run(view);
-  if (docker) await stopWorkers();
-  await restoreFirewall();
-  view.close();
-  for (const e of new Set(scan.errors)) console.error(yellow(e));
-  if (skipped.size) console.error(yellow(`not tried: ${[...skipped].join(", ")}, which the docker containers can't run (a scan without --docker can)`));
-  if (scan.found) console.log(green(`stopped at the first connection that held up: a speed test, ${duration(hold)} connected, a speed test again and a reconnect`));
-  else if (scan.stopping) console.log(yellow("interrupted, showing partial results"));
-  // a slower one is never stopped at, so it isn't checked
-  else if (stopAtFirst && scan.results.some((r) => r.status === "ok"))
-    console.log(yellow(`none held up at ${MIN_MBPS} Mbps or more: the connections below are slower, and weren't checked for stability`));
-  const choices = report(scan.results, scan.protocols, { all: a.all, speedTest: speedTest || stopAtFirst }); // stop at the first measures speed
-  // its working connections replace the saved ones it tried, so what stopped working drops out; the saved ones it didn't try
-  // (other countries, or what a stopped scan didn't get to) stay, after its own; a scan where nothing worked keeps the last
-  const tried = new Set(scan.results.filter((r) => r.status !== "interrupted").map((r) => `${r.query} ${r.protocol}`));
-  saveLast(choices, undefined, tried);
-  await checkUpdate();
-  if (updateNotice()) console.error("\n" + versionLines().join("\n"));
-  if (tty && choices.length) await offerConnect(choices, timeout);
+  for (;;) {
+    const found = await scanOnce(flags, tty);
+    if (found === null) return;
+    if (found === "update") return updateAndRestart();
+    if (!tty) return;
+    // nothing worked: the saved ones, which may work again; the screen still lets you scan again
+    const last = found.results.length ? null : loadLast();
+    const to = await showResults({
+      entries: last?.results ?? found.results,
+      at: last?.at ?? Date.now(),
+      timeout: found.timeout,
+      saved: !!last,
+      note: last ? "nothing connected in this scan: these are your saved connections, from earlier" : undefined,
+      checker: () => dockerChecker(found.timeout),
+    });
+    if (to === "quit") return;
+    flags = again;
+  }
 }
 
 main().catch(async (e) => {

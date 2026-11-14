@@ -75,21 +75,46 @@ export async function windscribe(...args: string[]): Promise<string> {
 // "Connected: Miami - Vice" → "Miami - Vice"
 export const place = (state: string) => state.split(":").slice(1).join(":").trim();
 
-/** "Connected: Miami - Vice", "Connecting: …", "Disconnected", … */
-export async function connectState(): Promise<string> {
-  // macOS marks the line with a leading "*" once connected: "*Connect state: Connected: Miami - Vice"
-  return (await windscribe("status")).match(/^\*?Connect state: (.*)$/m)?.[1].trim() ?? "";
-}
+// windscribe-cli status prints a "Label: value" line per item. The app's 2.25 renamed three of them, and older apps are still
+// out there, so either wording goes: 2.25 and newer say "Login", "Connection", "Firewall", older ones "Login state",
+// "Connect state", "Firewall state" (and mark the connect state with a "*" while they check the connection)
+const LABELS = { login: "Login(?: state)?", connection: "(?:Connection|Connect state)", firewall: "Firewall(?: state)?" };
+
+/** An item of windscribe-cli status, by its label in either wording; "" when it isn't there */
+export const statusValue = (status: string, item: keyof typeof LABELS) =>
+  status.match(new RegExp(`^\\*?${LABELS[item]}:[ \\t]*(.*)$`, "m"))?.[1].trim() ?? "";
+
+/** The connect state in a status, as the apps before 2.25 word it, from either: "Connected: Miami - Vice", "Connecting: …",
+ * "Disconnecting", "Disconnected", "Error: …". 2.25 and newer say "Connected to Miami - Vice", and add "(checking the
+ * connection)" while they check it, or "(network interference detected)"; older ones add "[Network interference]" */
+export const connectStateOf = (status: string) => statusValue(status, "connection")
+  .replace(/\s*(\((checking the connection|network interference detected)\)|\[Network interference\])$/i, "")
+  .replace(/^(Connected|Connecting) to /, "$1: ");
+
+/** "Connected: Miami - Vice", "Connecting: …", "Disconnected", … whichever app version */
+export const connectState = async () => connectStateOf(await windscribe("status"));
+
+/** "Logged in", "Logging in", "Logged out" or "Error: …", whichever app version */
+export const loginState = (status: string) => statusValue(status, "login");
+
+/** The VPN's IP while connected (once the app has checked the connection): 2.25 and newer say "IP: 1.2.3.4 (VPN)", older
+ * ones "VPN IP: 1.2.3.4"; "" otherwise */
+export const vpnIpOf = (status: string) =>
+  status.match(/^(?:VPN IP:[ \t]*(\S+)|IP:[ \t]*(\S+)[ \t]+\(VPN\))/m)?.slice(1).find(Boolean) ?? "";
+
+/** This computer's own IP while disconnected: "IP: 1.2.3.4 (public)", or "Public IP: 1.2.3.4" before 2.25; "" otherwise */
+export const publicIpOf = (status: string) =>
+  status.match(/^(?:Public IP:[ \t]*(\S+)|IP:[ \t]*(\S+)[ \t]+\(public\))/m)?.slice(1).find(Boolean) ?? "";
 
 /** Waits for the app to run and be logged in; resolves to its status output */
 export async function waitForLogin(): Promise<string> {
   // the first CLI call launches the app if it isn't running; give it a moment to start and restore the session
   let status = await windscribe("status");
-  for (let i = 0; i < 15 && !status.includes("Logged in"); i++) {
+  for (let i = 0; i < 15 && loginState(status) !== "Logged in"; i++) {
     await sleep(1000);
     status = await windscribe("status");
   }
-  if (!status.includes("Logged in"))
+  if (loginState(status) !== "Logged in")
     throw new Error("Windscribe is not logged in, or the app is not running. Open the Windscribe app and log in, then try again."
       + `\nDon't have it? ${DOWNLOAD_URL}`);
   return status;
@@ -177,13 +202,14 @@ export function toldToDisconnect(size: number): boolean {
   }
 }
 
-export const isFirewallOn = (status: string) => /^Firewall state: On/m.test(status);
+// "On", "Off" or "Always On"
+export const isFirewallOn = (status: string) => /^(Always )?On$/.test(statusValue(status, "firewall"));
 
 let firewallChanged = false; // blockInternet() turned the firewall on, so restoreFirewall() turns it back off
 
 /** Turns on the app's firewall, so nothing goes online outside the VPN. False if it was on already (it then stays on) */
 export async function blockInternet(): Promise<boolean> {
-  if (!/^Firewall state: Off/m.test(await windscribe("status"))) return false;
+  if (statusValue(await windscribe("status"), "firewall") !== "Off") return false;
   await windscribe("firewall", "on");
   return (firewallChanged = true);
 }

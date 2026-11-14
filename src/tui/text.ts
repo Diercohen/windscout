@@ -26,3 +26,23 @@ export function pad(s: string, n: number, align: Align = "left"): string {
   if (align === "center") return " ".repeat(Math.floor(gap / 2)) + s + " ".repeat(Math.ceil(gap / 2));
   return align === "right" ? " ".repeat(gap) + s : s + " ".repeat(gap);
 }
+
+/** s cut to n visible columns, ending in "…" when it was longer; its colors end there */
+export function cut(s: string, n: number): string {
+  if (vw(s) <= n) return s;
+  let out = "", w = 0;
+  for (const [t] of s.matchAll(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\|[\u{1F1E6}-\u{1F1FF}]{2}|[\u{1F300}-\u{1FAFF}]|[\s\S]/gu)) {
+    if (t.startsWith("\x1b")) {
+      out += t;
+      continue;
+    }
+    if (w + vw(t) > n - 1) break;
+    out += t;
+    w += vw(t);
+  }
+  return out + (plain() ? "…" : "\x1b[0m…");
+}
+
+/** Plain text in lines of at most n columns, broken at spaces */
+export const wrap = (s: string, n: number) => s.match(new RegExp(`.{1,${Math.max(1, n)}}(\\s+|$)|\\S+`, "g"))?.map((l) => l.trim()) ?? [s];
+
